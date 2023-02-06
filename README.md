@@ -39,7 +39,24 @@ export default {
 
 打包后可以看到，这是一个立即执行函数
 
-![截屏2023-02-06 16.00.30](/Users/liujiarui/Library/Application Support/typora-user-images/截屏2023-02-06 16.00.30.png)
+```javascript
+(function (global, factory) {
+  typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
+  typeof define === 'function' && define.amd ? define(factory) :
+  (global = typeof globalThis !== 'undefined' ? globalThis : global || self, global.Vue = factory());
+})(this, (function () { 'use strict';
+
+  function initState(vm) {
+   ....
+  }
+  ....
+  function Vue(options) {
+    ...
+  }
+  return Vue;
+
+}));
+```
 
 我们知道，使用vue时是这么定义data的：
 
