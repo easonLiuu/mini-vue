@@ -1,0 +1,9 @@
+# dependencies
+/node_modules
+/package-lock.json
+
+# production
+/dist
+
+# misc
+.DS_Store
