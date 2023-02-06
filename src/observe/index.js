@@ -20,6 +20,7 @@ export function defineReactive(target, key, value) {
     //修改
     set(newValue) {
       if (newValue === value) return;
+      observe(newValue)
       value = newValue;
     },
   });
