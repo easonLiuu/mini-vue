@@ -91,6 +91,70 @@ export function initMixin(Vue) {
   };
 }
 ```
+### 实现对象响应式
+
+`observe(data)`是响应式模块，用来观测数据实现对象响应式，在初始化数据里调用`observe`，在里面我们只对对象进行劫持，return出new了一个`Observer`类，这个类里面循环对象的属性依次劫持。
+
+```javascript
+export function observe(data) {
+  if (typeof data !== "object" || data == null) {
+    return;
+  }
+  //判断一个对象是否被劫持过，一个对象如果被劫持了，后面就不需要被劫持了
+  //需要增添一个实例，用实例判断是否被劫持过
+
+  return new Observer(data);
+}
+
+```
+
+walk里面调用了`defineReactive`，这个里面的逻辑就是对所有对象属性进行劫持，使用了`Object.defineProperty`实现了对象的响应式，可以看到，`value`存放在了闭包，所以不会自动销毁。`defineReactive`里最开始又调用了`observe(value)`目的是深层观测对象。
+
+```javascript
+export function defineReactive(target, key, value) {
+  observe(value);//对所有对象进行属性劫持
+  //value存放在了闭包
+  Object.defineProperty(target, key, {
+    //取
+    get() {
+      return value;
+    },
+    //修改
+    set(newValue) {
+      if (newValue === value) return;
+      value = newValue;
+    },
+  });
+}
+```
+
+最后一个很重要的点，就是在初始化数据时，我们使用了`vm.data = data`将对象放在了实例上，但如果就这么做，我们在写代码时取数据应该是`vm.data.xxxx`，但是实际开发中我们都是直接`vm.xxx`，所以这里需要将将`vm._data`用`vm`代理，因此定义了`proxy`函数，在实现响应式后，我们循环属性并依次调用`proxy`实现代理。
+
+```javascript
+function initData(vm) {
+  ...
+  vm._data = data;
+  observe(data);
+  for (let key in data) {
+    proxy(vm, "_data", key);
+  }
+}
+```
+
+```javascript
+function proxy(vm, target, key) {
+  Object.defineProperty(vm, key, {
+    get() {
+      return vm[target][key];
+    },
+    set(newValue){
+        vm[target][key] = newValue;
+    }
+  });
+}
+```
+
+
 
 
 
