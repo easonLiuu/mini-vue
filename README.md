@@ -108,7 +108,7 @@ export function observe(data) {
 
 ```
 
-walk里面调用了`defineReactive`，这个里面的逻辑就是对所有对象属性进行劫持，使用了`Object.defineProperty`实现了对象的响应式，可以看到，`value`存放在了闭包，所以不会自动销毁。`defineReactive`里最开始又调用了`observe(value)`目的是深层观测对象。
+walk里面重新定义了属性，调用了`defineReactive`，这个里面的逻辑就是对所有对象属性进行劫持，使用了`Object.defineProperty`实现了对象的响应式，可以看到，`value`存放在了闭包，所以不会自动销毁。`defineReactive`里最开始又调用了`observe(value)`目的是深层观测对象。
 
 ```javascript
 export function defineReactive(target, key, value) {
