@@ -154,6 +154,103 @@ function proxy(vm, target, key) {
   });
 }
 ```
+### 实现数组的函数劫持
+
+数组劫持核心是，重写数组方法并观测数组中的每一项，对数组中新增属性进行判断，并对新增内容再次观测。
+
+在重写数组方法时，我们使用的是面向切片编程，也就是内部调用原来的方法。首先`Array.prototype`获取数组原型，紧接着实现了重写，注意重写时要保留数组原有的特性。对数组的7个能够修改原数组的方法进行了重写。
+
+```javascript
+let oldArrayProto = Array.prototype; 
+export let newArrayProto = Object.create(oldArrayProto);
+//7个修改原数组的方法
+let methods = ["push", "pop", "shift", "unshift", "reverse", "sort", "splice"];
+methods.forEach((method) => {
+  //arr.push(1,2,3)
+  newArrayProto[method] = function (...args) {
+    const result = oldArrayProto[method].call(this, ...args); //this是arr 
+    return result;
+  };
+});
+
+```
+
+紧接着我们观测数组的每一项，如果数组里出现引用类型（对象）的数据，我们需要检测到对象的变化。
+
+```javascript
+class Observer {
+  constructor(data) {
+    if (Array.isArray(data)) {
+      data.__proto__ = newArrayProto;
+      this.observeArray(data);
+    } else {
+      this.walk(data);
+    }
+  }
+  ...
+  observeArray(data) {
+    data.forEach((item) => observe(item));
+  }
+}
+```
+
+然后我们对数组中新增属性进行判断，`push`、`unshift`、`splice`三个方法会新增数组里的内容，并把新增的暂存起来，并对新增内容再次观测。
+
+那么我们如何调用`observeArray`对新增的内容进行观测呢？
+
+这里用了一个很巧妙的方式。注意下面代码中的`this`其实就是`src/index.js`里面的`data`，因此在`Observer`类中我们给数据新增了一个标识，把this当前`Observer`类的实例指向了`data.__ob__`。这样通过`this.__ob__`就能获取当前`Observer`类的实例了，在实例下有一个`observeArray`方法就能对新增内容进行观测了。
+
+```javascript
+methods.forEach((method) => {
+  newArrayProto[method] = function (...args) {
+    ...
+    let inserted;
+    //这里的this和index里的data是一个东西
+    let ob = this.__ob__;
+    switch (method) {
+      case "push":
+      case "unshift":
+        inserted = args;
+        break;
+      case "splice":
+        inserted = args.slice(2);
+      default:
+        break;
+    }
+    if (inserted) {
+      //对新增内容再次进行观测
+      ob.observeArray(inserted);
+    }
+    ...
+  };
+});
+```
+
+```javascript
+class Observer {
+  constructor(data) {
+    Object.defineProperty(data, "__ob__", {
+      value: this,
+      enumerable: false, //不可枚举 循环时无法获取
+    });
+    //data.__ob__ = this; //还给数据加了一个标识 来判断是否被观测过
+    ...
+}
+```
+
+这里有一个需要注意的地方，在定义`__ob__`时一定要把它设置成不可枚举，这里`__ob__`的第二个作用是给数据加了一个标识，来判断是否被观测过，如果被观测过，直接返回当前实例。如果直接`data.__ob__ = this`，并且如果data是对象的话，在`defineReactive`重新定义属性时一定会造成一个死循环。
+
+```javascript
+export function observe(data) {
+  ...
+  if (data.__ob__ instanceof Observer) {
+    return data.__ob__; //说明被观测过
+  }
+  ...
+}
+```
+
+
 
 
 
