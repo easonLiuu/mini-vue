@@ -304,6 +304,165 @@ export function compileToFunction(template) {
 这里需要说明一下：
 
 如果是`script`标签引用的`vue.global.js` 编译是浏览器运行的，但vue还有runtime运行时，它不包含模版编译，它整个编译是打包时候通过loader来转义.vue文件，用runtime不能使用`template`（option里不能指定template，但是可以指定render）
+### 模版转换成AST语法树
+
+在`compileToFunction`函数里定义`parseHTML`并将`template`作为参数传入，`parseHTML`里面的两大核心逻辑是截取标签和创建AST语法树。
+
+```javascript
+export function compileToFunction(template) {
+  //1.将template转换成ast语法树
+  let ast = parseHTML(template);
+  //2.生成render方法 (render方法执行后的返回结果就是虚拟DOM)
+  ....
+}
+
+```
+
+#### 截取标签
+
+我们首先定义了几个正则，用来匹配标签和属性的，这里就不再赘述。但是注意vue3实现模版编译时用的不是正则，这个仓库里我们实现的是vue2的逻辑。
+
+```javascript
+const ncname = `[a-zA-Z_][\\-\\.0-9_a-zA-Z]*`;
+const qnameCapture = `((?:${ncname}\\:)?${ncname})`;
+const startTagOpen = new RegExp(`^<${qnameCapture}`); // 标签开头的正则 捕获的内容是 标签名
+const endTag = new RegExp(`^<\\/${qnameCapture}[^>]*>`); // 匹配标签结尾的  </div>
+const attribute =
+  /^\s*([^\s"'<>\/=]+)(?:\s*(=)\s*(?:"([^"]*)"+|'([^']*)'+| ([^\s"'=<>`]+)))?/; // 匹配属性的
+const startTagClose = /^\s*(\/?)>/; // 匹配标签结束的  >
+const defaultTagRE = /\{\{((?:.|\n)+?)\}\}/g; //{{}}
+```
+
+紧接着我们来截取标签，模版`html`最开始肯定是`<`开头，`textEnd` 为 0 的意义是开始标签或者结束标签，大于0 就是文本的结束位置，如果`textEnd == 0`，我们调用`parseStartTag`函数，这个函数就是用来匹配开始标签的，匹配成功后我们就创建一个`match`对象用来存放标签名和里面的属性，紧接着调用`advance`函数，它在每一次匹配成功后都会截取掉匹配的`html`，直到最后`html`为空。这也是为什么我们使用`while(html)`的原因。在`parseStartTag`里，如果不是开始标签的结束那么就一直匹配下去，因为标签里面可能包含属性等内容要继续解析下去，最后我们返回了`match`对象。
+
+回到`while`循环里，我们解析到了开始标签，调用`start`函数，这个就是创建语法树的一些逻辑，我们把功能抛出去了，后面会说。如果我们解析到的不是开始标签，并且`textEnd`为0，那就有可能是一个结束标签，`let endTagMatch = html.match(endTag)`，使用正则匹配判断是与否。
+
+如果`textEnd`大于0，那么`textEnd`就是文本的结束位置，这部分的逻辑也比较简单。
+
+```javascript
+function parseHTML(html) {
+  ...
+  //html最开始肯定是<
+  function advance(n) {
+    html = html.substring(n);
+  }
+  //匹配开始标签
+  function parseStartTag() {
+    const start = html.match(startTagOpen);
+    if (start) {
+      const match = {
+        tagName: start[1], //标签名
+        attrs: [],
+      };
+      advance(start[0].length);
+      //如果不是开始标签的结束那么就一直匹配下去
+      let attr;
+      let end;
+      while (
+        !(end = html.match(startTagClose)) &&
+        (attr = html.match(attribute))
+      ) {
+        advance(attr[0].length);
+        match.attrs.push({name: attr[1], value: attr[3] || attr[4] || attr[5] || true})
+      }
+      if (end) {
+        advance(end[0].length);
+      }
+      return match;
+    }
+    return false; //不是开始标签
+  }
+  while (html) {
+    //textEnd 为 0 为开始标签或者结束标签
+    //大于0 就是文本的结束位置
+    let textEnd = html.indexOf("<"); //如果indexOf中索引是0 说明是个标签
+    if (textEnd == 0) {
+      //开始标签的匹配结果
+      const startTagMatch = parseStartTag();
+      if(startTagMatch){ //解析到的开始标签
+        start(startTagMatch.tagName, startTagMatch.attrs);
+        continue;
+      }
+      let endTagMatch = html.match(endTag);
+      if(endTagMatch){
+        end(endTagMatch[1]);
+        advance(endTagMatch[0].length);   
+        continue;
+      }
+    }
+    if(textEnd > 0){
+        let text = html.substring(0, textEnd); 
+        if(text){
+            chars(text);
+            advance(text.length); 
+        }
+    }
+  }
+}
+```
+
+#### 创建AST抽象语法树
+
+这部分的设计其实很巧妙，我们使用栈型结构创建树，当遇到开始标签时我们入栈，遇到结束标签时出栈，那么栈里面前面的元素一定是他的紧挨着的后面元素的父亲。
+
+我们首先定义了`type`类型，分别表示元素节点，文本节点等，然后定义了一个栈用来存放元素，定义了`currentParent`指向栈中的最后一个，定义了`root`为根节点。
+
+然后定义了`createASTElement`函数，返回了树的一些属性。
+
+在解析到开始标签并返回值后，我们调用了`start`函数，这个函数里首先创建了一个`ast`节点，然后判断当前的树是否为空树，如果是，那么将当前节点设置为树的根节点。如果当前有`currentParent`属性，那么就将`currentParent`设为当前节点的父亲，为什么是`currentParent`？前面说过，`currentParent`指向栈中最后一个，这个一定是当前节点的父亲。并且给`currentParent`赋予`children`属性，这个属性的值就是当前节点。由于是开始标签，我们要将该节点入栈并将此节点设为`currentParent`。
+
+在`textEnd`大于0并且`text`存在的情况下，我们调用`chars`，将文本直接放到当前指向的节点中，也就是设置成当前`currentParent`的孩子。当然由于我们是实现的vue简易版本，我们在处理空格文本这一部分不够严谨，这里不用在意。
+
+在`textEnd == 0`并且匹配到了结束标签的情况下，我们调用`end`，弹出栈顶元素，并重新设置`currentParent`。
+
+```javascript
+function parseHTML(html) {
+
+  const ELEMENT_TYPE = 1;
+  const TEXT_TYPE = 3;
+  const stack = []; 
+  let currentParent; 
+  let root; 
+
+  function createASTElement(tag, attrs){
+    return {
+        tag,
+        type: ELEMENT_TYPE,
+        children:[],
+        attrs,
+        parent: null
+    }
+  }
+  //栈型结构创建抽象语法树
+  function start(tag, attrs){
+    let node = createASTElement(tag, attrs); //创建一个ast节点
+    if(!root){ //判断是否为空树
+        root = node; //当前是树的根节点
+    }
+    if(currentParent){
+        node.parent = currentParent; //赋予parent属性
+        currentParent.children.push(node); //赋予children属性
+    }
+    stack.push(node);
+    currentParent = node; //currentParent是栈中的最后一个
+  }
+  function chars(text){ //文本直接放到当前指向的节点中
+    text = text.replace(/\s/g, '');
+    text && currentParent.children.push({
+        type: TEXT_TYPE,
+        text,
+        parent: currentParent
+    })
+  }
+  function end(tag){
+    let node = stack.pop();//弹出最后一个 校验标签是否合法
+    currentParent = stack[stack.length - 1]
+  }
+  ...
+}
+```
+
+
 
 
 
