@@ -249,6 +249,63 @@ export function observe(data) {
   ...
 }
 ```
+### 解析模版参数
+
+我们知道，在使用`vue`时，我们指定`el`，用来把数据挂载到`el`上，因此在初始化操作时，我们要实现数据的挂载。首先判断是否具有`el`，如果有调用`vm.$mount`。
+
+```javascript
+export function initMixin(Vue) {
+  //初始化操作
+    ...
+    if (options.el) {
+      //实现数据的挂载
+      vm.$mount(options.el);
+    }
+  };
+```
+
+`vm.$mount`的实现逻辑如下，我们首先判断`options`上是否指定了`render`函数，如果没有，查找`option`上是否写了`template`，如果没有但是写了`el`，那么我们取到`el`的外部HTML赋给`template`，如果写了`template`那么直接用写了的`template`，紧接着我们对模版进行编译，调用`compileToFunction`赋给`render`，然后我们在`ops`上设置`render`属性并把`render`赋给`ops.render`。
+
+```javascript
+Vue.prototype.$mount = function (el) {
+    const vm = this;
+    el = document.querySelector(el);
+    let ops = vm.$options;
+    if (!ops.render) {
+      let template;
+      if (!ops.template && el) {
+        template = el.outerHTML;
+      } else {
+        if (el) {
+          template = ops.template; 
+        }
+      }
+      if (template) {
+        const render = compileToFunction(template);
+        ops.render = render;
+      }
+      console.log(template);
+    }
+    ops.render;
+  };
+```
+
+在`src/observe/compiler/index`下定义`compileToFunction`，`compileToFunction`函数就是对模版进行编译，里面首先将`template`转换成ast语法树，然后生成`render`方法 (render方法执行后的返回结果就是虚拟DOM)
+
+```javascript
+//对模版进行编译
+export function compileToFunction(template) {
+  //1.将template转换成ast语法树
+  ...
+  //2.生成render方法 (render方法执行后的返回结果就是虚拟DOM)
+}
+```
+
+这里需要说明一下：
+
+如果是`script`标签引用的`vue.global.js` 编译是浏览器运行的，但vue还有runtime运行时，它不包含模版编译，它整个编译是打包时候通过loader来转义.vue文件，用runtime不能使用`template`（option里不能指定template，但是可以指定render）
+
+
 
 
 
