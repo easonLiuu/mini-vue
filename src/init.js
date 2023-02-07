@@ -37,7 +37,6 @@ export function initMixin(Vue) {
         const render = compileToFunction(template);
         ops.render = render;
       }
-      console.log(template);
     }
     ops.render; //最终获取render方法
 
