@@ -461,6 +461,143 @@ function parseHTML(html) {
   ...
 }
 ```
+### 生成代码字符串
+
+上面我们创建了AST语法树，接下来我们来看看生成代码字符串的逻辑是如何实现的，假设模版是这样的，首先把模版转换成语法树，我们需要把树装成下面这样的语法
+
+```html
+<div id="app">
+      <div style="color: red">
+        {{name}hello
+      </div>
+      <span>
+       {{name}}
+      </span>      
+    </div>
+```
+
+```javascript
+ render(){
+  return _c('div', {id: 'app'}, _c('div', {style: {color: 'red'}}, _v(_s(name)+'hello')
+  ,_c('span', undefined, _v(_s(name))))
+ }
+```
+
+上面return出去的就是代码字符串。
+
+```javascript
+export function compileToFunction(template) {
+  let ast = parseHTML(template);
+  codeGen(ast);
+  console.log(codeGen(ast));
+}
+```
+
+`codeGen`函数逻辑是什么呢？其实生成代码字符串就是一个字符串组装拼接的一个过程。我们按照需要生成的代码字符串的格式编写函数，`_c`里面第一个是标签名，第二个是属性，我们看一下属性这部分的逻辑，调用了`genProp`函数。
+
+```javascript
+function codeGen(ast) {
+  let children = genChildren(ast.children);
+
+  let code = `_c('${ast.tag}', ${
+    ast.attrs.length > 0 ? genProps(ast.attrs) : "null"
+  }${ast.children.length ? `,${children}` : ""}
+  )`;
+  return code;
+}
+```
+
+这部分就是循环ast语法树里的`attrs`属性对其进行处理，需要注意的是，如果属性的`key`是`style`，要单独处理一下，比如`style="color:red;background:yellow"`，最后转成`style:{"color":"red","background":"yellow"}`，首先定义了一个空对象，然后进行了字符串分割，最后将obj对象赋给了`attr.value`。
+
+```javascript
+function genProps(attrs) {
+  let str = "";
+  for (let i = 0; i < attrs.length; i++) {
+    let attr = attrs[i];
+    if (attr.name === "style") {
+      //color: red => {color:'red'}
+      let obj = {};
+      if (typeof attr.value == "string") {
+        attr.value.split(";").forEach((item) => {
+          let [key, value] = item.split(":");
+          obj[key] = value;
+        });
+        attr.value = obj;
+      }
+    }
+    str += `${attr.name}:${JSON.stringify(attr.value)},`;
+  }
+  //截取掉最后一个逗号
+  return `{${str.slice(0, -1)}}`;
+}
+```
+
+然后我们看一下对`children`属性的处理，在`codeGen`函数里我们调用了`genChildren`，在`genChildren`里又调用了`gen`函数。
+
+```javascript
+function genChildren(children) {
+  return children.map((child) => gen(child)).join(",");
+}
+```
+
+在`gen`函数中，我们先判断节点的类型，如果是元素节点，那么直接调用`codeGen`函数处理；如果是文本节点，我们首先获取`text`，文本节点分为两种类型，一种是有`{{}}`的，另外一种是纯文本节点，此处使用正则匹配。
+
+纯文本节点的实现逻辑很简单，我们主要看一下有{{}}的，此处的核心逻辑是字符串分割，循环匹配，用一个数组存起来，我们首先定义`lastIndex`，它可以理解为最后一个节点出现的位置，
+
+此处我们以`{{name}}kkkk{{age}}jjj`为例子，最后生成的代码字符串为：`_v(_s(name)+"kkkk"+_s(age)+"jjj") ,_c('span', null,_v("world"))`
+
+当我们第一次匹配时，`index`为0，`match为['{{name}}', 'name', index: 0, input: '{{name}}kkkk{{age}}jjj', groups: undefined]`我们将匹配到的push进数组，紧接着重新计算`lastIndex = 0 + 8 = 8`，然后进行第二次匹配，匹配到的位置索引为12，此时`index>lastIndex`，也就是`12>8`，说明在第二个`{{}}`出现时前面一定有纯文本，我们提取出来push进`tokens`，也就是下面这一部分的逻辑。
+
+```javascript
+ if (index > lastIndex) {
+          tokens.push(JSON.stringify(text.slice(lastIndex, index)));
+ }
+```
+
+然后又把第二次匹配到的`match[1]push`进数组，再重新计算`lastIndex`，此时的`lastIndex`一定是最后一次出现`{{}}`的位置，此时如果`text`的长度还大于`lastIndex`，说明最后一次`{{}}`后还有纯文本，我们要提取出来`push`进数组。
+
+最后进行字符串拼接即可。
+
+在此处有一个需要注意的点，`defaultTagRE`，注意一下正则表达式`/g`对`exec()`测试结果的影响
+
+> 对于`exec()`方法而言，在全局模式下，它每次执行都只会返回一个匹配项，并且会改变`lastIndex`的值，再次执行的时候，会从`lastIndex`这个位置开始继续搜索。
+
+因此我们在每次循环之前都需要将`defaultTagRE.lastIndex`置为0，重新设置索引。
+
+```javascript
+const defaultTagRE = /\{\{((?:.|\n)+?)\}\}/g; //{{}}
+function gen(node) {
+  if (node.type === 1) {
+    return codeGen(node);
+  } else {
+    let text = node.text;
+    if (!defaultTagRE.test(text)) {
+      return `_v(${JSON.stringify(text)})`;
+    } else {
+      //_v(_s(name) + 'hello')
+      let tokens = [];
+      let match;
+      //重新设置索引
+      defaultTagRE.lastIndex = 0;
+      let lastIndex = 0;
+      while ((match = defaultTagRE.exec(text))) {
+        let index = match.index; //匹配的位置
+        if (index > lastIndex) {
+          tokens.push(JSON.stringify(text.slice(lastIndex, index)));
+        }
+        tokens.push(`_s(${match[1].trim()})`);
+        lastIndex = index + match[0].length;
+      }
+      if (lastIndex < text.length) {
+        tokens.push(JSON.stringify(text.slice(lastIndex)));
+      }
+      return `_v(${tokens.join("+")})`;
+    }
+  }
+}
+```
+
+最后，我们在`codeGen`函数里返回代码字符串`code`。
 
 
 
