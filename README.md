@@ -598,6 +598,99 @@ function gen(node) {
 ```
 
 最后，我们在`codeGen`函数里返回代码字符串`code`。
+### 生成render函数
+
+上面我们把ast语法树转换成了代码字符串，我们需要的是生成render方法并执行它，最简单的方法就是new Function一下，此处我们用with包裹了一下。
+
+> with语句，可以方便地用来引用某个特定对象中已有的属性，用于设置代码在特定对象中的作用域。
+
+也就是说，如果代码字符串中data里面的变量，使用with(this)，就是取this下面变量，比如this.name，此处的this就是当前vm实例。
+
+另外说一下，模版引擎的实现原理就是 with + new Function
+
+```javascript
+export function compileToFunction(template) {
+  let ast = parseHTML(template);
+  let code = codeGen(ast);ender方法执行后的返回结果就是虚拟DOM)
+  //模版引擎的实现原理      with + new Function
+  code = `with(this){return ${code}}`
+  let render = new Function(code);
+  return render;
+}
+```
+
+在initMixin方法里我们获取了render方法，我们需要调用render产生虚拟DOM。因此我们定义了mountComponent方法用来组件的挂载，这个方法主要有三大逻辑：
+
+- 调用render产生虚拟DOM
+- 根据虚拟DOM产生真实DOM
+- 插入到el元素中
+
+```javascript
+export function initMixin(Vue) {
+  ...
+  Vue.prototype.$mount = function (el) {
+      ...
+      //写了template就用写了的template
+      if (template) {
+        //对模版编译
+        const render = compileToFunction(template);
+        ops.render = render;
+      }
+    }
+    //最终获取render方法
+    //组件的挂载
+    mountComponent(vm, el);
+  };
+}
+
+```
+
+```javascript
+export function initLifeCycle(Vue) {
+  Vue.prototype._update = function () {
+    console.log("update");
+  };
+  Vue.prototype._render = function () {
+    console.log("render");
+  };
+}
+
+export function mountComponent(vm, el) {
+  //1.调用render 产生虚拟DOM
+  vm._update(vm._render()); //vm.$options.render()  虚拟节点
+  //2.根据虚拟DOM产生真实DOM
+  //3.插入到el元素中
+}
+
+```
+
+在调用render产生虚拟DOM和真实DOM时，我们调用了实例上的方法，因此需要在Vue原型上扩展方法，并在入口文件里initLifeCycle(Vue)初始化。
+
+其中vm._render()就是执行代码生成的render函数，生成虚拟节点。
+
+vm._update()就是生成真实DOM
+
+```javascript
+import { initMixin } from "./init";
+import { initLifeCycle } from "./lifecycle";
+
+function Vue(options) {
+  //默认调用_init
+  this._init(options);
+}
+initMixin(Vue); //扩展init方法
+initLifeCycle(Vue);
+export default Vue;
+```
+
+讲到这里，我们先来把vue的核心流程梳理一下：
+
+- 创造响应式数据 
+- 模版转换成ast语法树 
+- ast语法树转换成render函数 
+- 后续每次数据更新可以只执行render函数，无需再次执行ast转换的过程
+- render函数会产生虚拟节点
+- 根据生成的虚拟节点创建真实DOM
 
 
 
