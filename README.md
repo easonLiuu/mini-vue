@@ -664,11 +664,11 @@ export function mountComponent(vm, el) {
 
 ```
 
-在调用render产生虚拟DOM和真实DOM时，我们调用了实例上的方法，因此需要在Vue原型上扩展方法，并在入口文件里initLifeCycle(Vue)初始化。
+在调用render产生虚拟DOM和生成真实DOM时，我们调用了实例上的方法，因此需要在Vue原型上扩展方法，并在入口文件里initLifeCycle(Vue)初始化。
 
 其中vm._render()就是执行代码生成的render函数，生成虚拟节点。
 
-vm._update()就是生成真实DOM
+vm._update()就是生成真实DOM。
 
 ```javascript
 import { initMixin } from "./init";
