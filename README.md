@@ -600,13 +600,13 @@ function gen(node) {
 最后，我们在`codeGen`函数里返回代码字符串`code`。
 ### 生成render函数
 
-上面我们把ast语法树转换成了代码字符串，我们需要的是生成render方法并执行它，最简单的方法就是new Function一下，此处我们用with包裹了一下。
+上面我们把ast语法树转换成了代码字符串，我们需要的是生成`render`方法并执行它，最简单的方法就是`new Function`一下，此处我们用`with`包裹了一下。
 
 > with语句，可以方便地用来引用某个特定对象中已有的属性，用于设置代码在特定对象中的作用域。
 
-也就是说，如果代码字符串中data里面的变量，使用with(this)，就是取this下面变量，比如this.name，此处的this就是当前vm实例。
+也就是说，如果代码字符串中data里面的变量，使用`with(this)`，就是取this下面变量，比如`this.name`，此处的this就是当前vm实例。
 
-另外说一下，模版引擎的实现原理就是 with + new Function
+另外说一下，模版引擎的实现原理就是 `with + new Function`
 
 ```javascript
 export function compileToFunction(template) {
@@ -619,9 +619,9 @@ export function compileToFunction(template) {
 }
 ```
 
-在initMixin方法里我们获取了render方法，我们需要调用render产生虚拟DOM。因此我们定义了mountComponent方法用来组件的挂载，这个方法主要有三大逻辑：
+在`initMixin`方法里我们获取了`render`方法，我们需要调用`render`产生虚拟DOM。因此我们定义了`mountComponent`方法用来组件的挂载，这个方法主要有三大逻辑：
 
-- 调用render产生虚拟DOM
+- 调用`render`产生虚拟DOM
 - 根据虚拟DOM产生真实DOM
 - 插入到el元素中
 
@@ -656,6 +656,8 @@ export function initLifeCycle(Vue) {
 }
 
 export function mountComponent(vm, el) {
+  //这里的el是通过querySelector处理过的
+  vm.$el = el;
   //1.调用render 产生虚拟DOM
   vm._update(vm._render()); //vm.$options.render()  虚拟节点
   //2.根据虚拟DOM产生真实DOM
@@ -664,11 +666,11 @@ export function mountComponent(vm, el) {
 
 ```
 
-在调用render产生虚拟DOM和生成真实DOM时，我们调用了实例上的方法，因此需要在Vue原型上扩展方法，并在入口文件里initLifeCycle(Vue)初始化。
+在调用`render`产生虚拟DOM和生成真实DOM时，我们调用了实例上的方法，因此需要在Vue原型上扩展方法，并在入口文件里`initLifeCycle(Vue)`初始化。
 
-其中vm._render()就是执行代码生成的render函数，生成虚拟节点。
+其中`vm._render()`就是执行代码生成的`render`函数，生成虚拟节点。
 
-vm._update()就是生成真实DOM。
+`vm._update()`就是生成真实DOM。
 
 ```javascript
 import { initMixin } from "./init";
@@ -687,18 +689,157 @@ export default Vue;
 
 - 创造响应式数据 
 - 模版转换成ast语法树 
-- ast语法树转换成render函数 
-- 后续每次数据更新可以只执行render函数，无需再次执行ast转换的过程
-- render函数会产生虚拟节点
+- ast语法树转换成`render`函数 
+- 后续每次数据更新可以只执行`render`函数，无需再次执行ast转换的过程
+- `render`函数会产生虚拟节点
 - 根据生成的虚拟节点创建真实DOM
 
+### 虚拟DOM生成真实DOM
 
+上面我们知道了在`vm.render()`里调用了生成的`render`函数，`render`函数用来生成虚拟DOM。因为`_render`是实例上面的方法，我们需要在Vue原型上定义这个方法。调用`render`方法时注意要改变this指向，目的是让with中的this指向vm。`render`里有`_c`，`_v`，`_s`等方法，我们也需要定义一下，其中`createElementVNode`是创建元素节点，`createTextVNode`是创建文本节点，`_s`里面就是对插值表达式里面对应的值进行处理。
 
+```javascript
+export function initLifeCycle(Vue) {
+  ...
+  //_c('div',{},...children)
+  Vue.prototype._c = function () {
+    return createElementVNode(this, ...arguments);
+  };
+  //_v(text)
+  Vue.prototype._v = function () {
+    return createTextVNode(this, ...arguments);
+  };
+  Vue.prototype._s = function (value) {
+    console.log(value);
+    if (typeof value !== "object") return value;
+    return JSON.stringify(value);
+  };
+  Vue.prototype._render = function () {
+    //渲染时会去实例中取值 属性和试图绑在一起
+    const vm = this;
+    //让with中的this指向vm
+    return vm.$options.render.call(vm);
+  };
+}
+```
 
+我们来看看`createElementVNode`、`createTextVNode`的内部实现，这里就不赘述，逻辑很简单，本质上就是创建虚拟DOM，其中key属性就是我们后面进行diff时使用的。
 
+这里需要注意一下ast语法树和虚拟DOM的区别：
 
+- ast是语法层面的转化，描述语法本身，描述js css html等语言的
+- 虚拟DOM：描述的dom元素，可以增加自定义属性，描述DOM的
 
+```javascript
+//h() _c()
+export function createElementVNode(vm, tag, data, ...children) {
+  if (data == null) {
+    data = {};
+  }
+  let key = data.key;
+  if (key) {
+    delete data.key;
+  }
+  return vnode(vm, tag, key, data, children);
+}
 
+//_v()
+export function createTextVNode(vm, text) {
+  return vnode(vm, undefined, undefined, undefined, undefined, text);
+}
+function vnode(vm, tag, key, data, children, text) {
+  return {
+    vm,
+    tag,
+    key,
+    data,
+    children,
+    text,
+  };
+}
+```
 
+接下来我们就需要将虚拟DOM转换成真实DOM，也就是调用`vm._update`方法，这个方法也需要在原型上定义，把虚拟DOM作为参数传入，在上一节中我们把el赋给了`vm.$el`，然后我们这个方法里取到el，注意这个el不能从options上取，`vm.$el`取到的el是通过`querySelector`处理过的，紧接着我们调用了`patch`方法，这个方法是核心，既有初始化的功能，又有更新(diff)的功能。
 
+```javascript
+export function initLifeCycle(Vue) {
+  //虚拟dom变成真实dom
+  Vue.prototype._update = function (vnode) {
+    const vm = this;
+    const el = vm.$el;
+    //patch既有初始化的功能 又有更新的功能
+    vm.$el = patch(el, vnode);
+  };
+  ...
+}
+```
+
+我们看一下`patch`方法的实现，传入两个参数分别是旧虚拟DOM和新虚拟DOM，这个方法牵扯到diff算法，我们在这一节不讲解，我们主要看一下初渲染流程，首先根据`oldVNode.nodeType`判断是不是一个真实元素，如果是我们获取它并拿到它的父元素，紧接着使用`createElm`创建真实元素，创建后的真实DOM我们赋给`newEle`，注意此时插入真实DOM的方式，我们应该先在elm后插入真实DOM，再删除老节点(elm)，否则顺序会乱。
+
+```javascript
+function patch(oldVNode, vnode) {
+  //初渲染流程
+  const isRealElement = oldVNode.nodeType;
+  if (isRealElement) {
+    const elm = oldVNode; //获取真实元素
+    const parentElm = elm.parentNode; //拿到父元素
+    //创建真实元素
+    let newEle = createElm(vnode);
+    parentElm.insertBefore(newEle, elm.nextSibling); //先插入再删 否则顺序会乱
+    parentElm.removeChild(elm); //删除老节点
+    return newEle;
+  } else {
+    //diff算法
+  }
+}
+```
+
+然后我们看一下`createElm`的内部实现，逻辑很简单，就是创建真实DOM，这里有一个`vnode.el = document.createElement(tag)`，是将真实节点和虚拟节点对应起来，后面如果修改属性了，可以直接找到虚拟节点对应的真实节点，主要用来后面的diff算法。其中函数里调用了`patchProps`方法，用来更新属性。
+
+```javascript
+function createElm(vnode) {
+  let { tag, data, children, text } = vnode;
+  if (typeof tag === "string") {
+    //这里将真实节点和虚拟节点对应起来 后面如果修改属性了 可以直接找到虚拟节点对应的真实节点
+    vnode.el = document.createElement(tag); 
+    //更新属性
+    patchProps(vnode.el, data);
+    children.forEach((child) => {
+      vnode.el.appendChild(createElm(child));
+    });
+  } else {
+    vnode.el = document.createTextNode(text);
+  }
+  return vnode.el;
+}
+```
+
+我们看一下`patchProps`的内部实现，逻辑也比较简单，就是对属性进行一个循环，然后使用`setAttribute`设置属性，这里对style属性做了单独处理。
+
+```javascript
+function patchProps(el, props) {
+  for (let key in props) {
+    if (key === "style") {
+      //style{color: 'red'}
+      for (let styleName in props.style) {
+        el.style[styleName] = props.style[styleName];
+      }
+    } else {
+      el.setAttribute(key, props[key]);
+    }
+  }
+}
+```
+
+最后我们回到`_update`方法，重新设置`vm.$el`，我们把`patch`返回的结果赋给`vm.$el`，用来后面的diff。
+
+```javascript
+export function initLifeCycle(Vue) {
+  Vue.prototype._update = function (vnode) {
+    const vm = this;
+    const el = vm.$el;
+    vm.$el = patch(el, vnode);
+  };
+}
+```
 
