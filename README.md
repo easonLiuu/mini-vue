@@ -6,7 +6,7 @@
 
 另外，这是我的博客
 
-[普通链接](https://www.yuque.com/easonliu-rl8as/tk4pbo)
+[Vue相关](https://www.yuque.com/easonliu-rl8as/tk4pbo)
 
 主要从Vue基础、Vue周边、Vue源码（变化侦测、虚拟DOM、模版编译、实例方法、生命周期等角度）对其进行了详细解释。
 
