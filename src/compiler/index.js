@@ -67,8 +67,8 @@ export function compileToFunction(template) {
   //1.将template转换成ast语法树
   let ast = parseHTML(template);
 
-  codeGen(ast);
-  console.log(codeGen(ast));
+  let code = codeGen(ast);
+
   //把树组装成下面的语法
 
   //   render(){
@@ -77,4 +77,10 @@ export function compileToFunction(template) {
   //   }
 
   //2.生成render方法 (render方法执行后的返回结果就是虚拟DOM)
+  //加with取值方便
+  //模版引擎的实现原理      with + new Function
+  code = `with(this){return ${code}}`
+  let render = new Function(code);
+  return render;
+ 
 }
