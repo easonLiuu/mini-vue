@@ -1,13 +1,81 @@
+import { createElementVNode, createTextVNode } from "./vdom";
+
+function createElm(vnode) {
+  let { tag, data, children, text } = vnode;
+  if (typeof tag === "string") {
+    vnode.el = document.createElement(tag); //这里将真实节点和虚拟节点对应起来 后面如果修改属性了 可以直接找到虚拟节点对应的真实节点
+    //更新属性
+    patchProps(vnode.el, data);
+    children.forEach((child) => {
+      vnode.el.appendChild(createElm(child));
+    });
+  } else {
+    vnode.el = document.createTextNode(text);
+  }
+  return vnode.el;
+}
+
+function patchProps(el, props) {
+  for (let key in props) {
+    if (key === "style") {
+      //style{color: 'red'}
+      for (let styleName in props.style) {
+        el.style[styleName] = props.style[styleName];
+      }
+    } else {
+      el.setAttribute(key, props[key]);
+    }
+  }
+}
+
+function patch(oldVNode, vnode) {
+  //初渲染流程
+  const isRealElement = oldVNode.nodeType;
+  if (isRealElement) {
+    const elm = oldVNode; //获取真实元素
+    const parentElm = elm.parentNode; //拿到父元素
+    //创建真实元素
+    let newEle = createElm(vnode);
+    parentElm.insertBefore(newEle, elm.nextSibling); //先插入再删 否则顺序会乱
+    parentElm.removeChild(elm); //删除老节点
+    return newEle;
+  } else {
+    //diff算法
+  }
+}
 export function initLifeCycle(Vue) {
-  Vue.prototype._update = function () {
-    console.log("update");
+  //虚拟dom变成真实dom
+  Vue.prototype._update = function (vnode) {
+    const vm = this;
+    const el = vm.$el;
+    console.log(vnode, el);
+    //patch既有初始化的功能 又有更新的功能
+    vm.$el = patch(el, vnode);
+  };
+  //_c('div',{},...children)
+  Vue.prototype._c = function () {
+    return createElementVNode(this, ...arguments);
+  };
+  //_v(text)
+  Vue.prototype._v = function () {
+    return createTextVNode(this, ...arguments);
+  };
+  Vue.prototype._s = function (value) {
+    console.log(value);
+    if (typeof value !== "object") return value;
+    return JSON.stringify(value);
   };
   Vue.prototype._render = function () {
-    console.log("render");
+    //渲染时会去实例中取值 属性和试图绑在一起
+    const vm = this;
+    //让with中的this指向vm
+    return vm.$options.render.call(vm);
   };
 }
 
 export function mountComponent(vm, el) {
+  //这里的el是通过querySelector处理过的
+  vm.$el = el;
   //1.调用render 产生虚拟DOM
 
   vm._update(vm._render()); //vm.$options.render()  虚拟节点
