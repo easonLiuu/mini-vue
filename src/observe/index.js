@@ -1,4 +1,5 @@
 import { newArrayProto } from "./array";
+import Dep from "./dep";
 
 class Observer {
   constructor(data) {
@@ -30,10 +31,14 @@ class Observer {
 
 export function defineReactive(target, key, value) {
   observe(value); //对所有对象进行属性劫持
+  let dep = new Dep(); //每一个属性都有一dep
   //value存放在了闭包
   Object.defineProperty(target, key, {
     //取
     get() {
+      if (Dep.target) {
+        dep.depend(); //让这个属性的收集器记住当前的watcher
+      }
       return value;
     },
     //修改
@@ -41,6 +46,7 @@ export function defineReactive(target, key, value) {
       if (newValue === value) return;
       observe(newValue);
       value = newValue;
+      dep.notify();//通知更新
     },
   });
 }
