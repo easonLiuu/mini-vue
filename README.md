@@ -842,4 +842,190 @@ export function initLifeCycle(Vue) {
   };
 }
 ```
+### 依赖收集
+
+vue中有一个思想：数据驱动视图。我们可以理解成：当`data`中的属性发生变化时，使用该视图的数据也需要随之发生变化。而实现这一功能核心逻辑就是依赖收集，我们来说一下这一逻辑的大概思路：
+
+- 给模版中的属性，增加一个收集器`dep`
+- 页面渲染时，渲染逻辑封装到`watcher`中 ，也就是`vm._update(vm._render())`
+- 让`dep`记住这个`watcher`，稍后属性变化了，可以找到对应的`dep`中存放的`watcher`进行重新渲染
+
+我们改造一下`mountComponent`函数，这个函数`new`了`Watcher`类，也就是说，我们将渲染逻辑封装到了`Watcher`类中。
+
+```javascript
+export function mountComponent(vm, el) {
+  vm.$el = el;
+  const updateComponent = () => {
+    vm._update(vm._render());
+  };
+  const watcher = new Watcher(vm, updateComponent, true); //true用于标识是一个渲染Watcher
+}
+```
+
+在实现`Watcher`类和`Dep`类之前，我们梳理一下`dep`和`watcher`的关系：
+
+- 首先我们要知道，需要给每个属性增加一个`dep`，目的就是收集`watcher`，一个组件一个`watcher`，不同组件有不同的`watcher`
+- 一个组件中，有多个属性，n个属性对应一个组件，因此n个`dep`对应一个`watcher`
+- 一个属性可以对应多个组件，因此一个`dep`对应多个`watcher`
+- 因此`dep`和`watcher`是**双向的、多对多的**关系
+
+看一下`Watcher`类的实现，这里我们只需要先知道在创建`watcher`实例时调用了`get`方法，方法里会执行传入的`fn`方法用来渲染，在这个过程中会去`vm`上取值。`Dep.target = this`就是将`dep`和`watcher`关联起来，当创建渲染`watcher`时我们会把当前渲染的`watcher`放到`Dep.target`上，渲染完毕后清空。
+
+```javascript
+import Dep from "./dep";
+
+let id = 0;
+//每个属性有一个dep 属性是被观察者 watcher是观察者 属性变化了会通知观察者来更新 观察者模式
+class Watcher {
+  constructor(vm, fn, options) {
+    this.id = id++;
+    this.renderWatcher = options;
+    this.getter = fn;
+    this.deps = []; //后续实现计算属性和清理工作要用
+    this.depsId = new Set();
+    this.get(); //getter意味着调用这个函数可以发生取值操作
+  }
+  addDep(dep) {
+    //一个组件对应多个属性 重复的属性也不用记录
+    let id = dep.id;
+    if (!this.depsId.has(id)) {
+      this.deps.push(dep);
+      this.depsId.add(id);
+      dep.addSub(this); //watcher记住了dep dep也记住了watcher
+    }
+  }
+  get() {
+    Dep.target = this; 
+    this.getter(); 
+    Dep.target = null; 
+  }
+  update() {
+    //属性更新重新渲染
+    this.get();
+  }
+}
+
+export default Watcher;
+
+```
+
+下面看一下`Dep`类的实现，用来收集`watcher`，`subs`用来存放当前属性对应的`watcher`，类中有`depend`方法，我们知道此时的`Dep.target`上是当前`watcher`实例，也就是说调用了`watcher`实例上面的`addDep`方法。
+
+```javascript
+let id = 0;
+//没有用的属性不会做依赖收集
+class Dep {
+  constructor() {
+    this.id = id++; //属性的dep收集watcher
+    this.subs = []; //这里存放着当前属性对应的watcher有哪些
+  }
+  depend() {
+    //不希望放重复的watcher 刚才只是一个单向的关系 dep->watcher
+    //也需要watcher存放dep
+    //下面这样写会重
+    //this.subs.push(Dep.target);
+    //console.log(this.subs)
+    Dep.target.addDep(this); //让watcher记录dep
+    //注意这是多对多的关系
+  }
+  addSub(watcher){
+    this.subs.push(watcher); 
+  }
+  notify(){
+    this.subs.forEach(watcher=>watcher.update()); //告诉watcher要更新了
+  }
+}
+Dep.target = null;
+
+export default Dep;
+
+```
+
+`depend`调用是在取值时调用，目的让当前取到的属性的收集器记住当前的`watcher`，其中，没有用到的属性不会被收集。
+
+```javascript
+export function defineReactive(target, key, value) {
+  observe(value);
+  let dep = new Dep(); //每一个属性都有一dep
+  Object.defineProperty(target, key, {
+    //取
+    get() {
+      if (Dep.target) {
+        dep.depend(); //让这个属性的收集器记住当前的watcher
+      }
+      return value;
+    },
+    //修改
+    set(newValue) {
+      if (newValue === value) return;
+      observe(newValue);
+      value = newValue;
+      dep.notify();//通知更新
+    },
+  });
+}
+```
+
+但需要注意，不能像下面这么写：
+
+```javascript
+depend() {
+    //不希望放重复的watcher 
+    //下面这样写会重
+    this.subs.push(Dep.target);
+}
+```
+
+原因在于，一个组件对应多个属性，重复的属性也不用记录，这也就是上述代码中`depend`方法调用`addDep`的原因。
+
+```javascript
+addDep(dep) {
+    let id = dep.id;
+    if (!this.depsId.has(id)) {
+      this.deps.push(dep);
+      this.depsId.add(id);
+      dep.addSub(this); //watcher记住了dep 而且去重了 此时dep也记住了watcher
+    }
+}
+```
+
+在`Watcher`类中，我们定义了`deps`数组，用于后续实现计算属性和清理工作，并将当前`dep`实例push进数组中，这就实现了`watcher`记住了`dep`并且实现了去重。
+
+紧接着我们调用`dep`上的`addSub`方法，这个方法就是让`dep`记住`watcher`，就是前面所说的让当前取到的属性的收集器记住当前的`watcher`。
+
+```javascript
+addSub(watcher){
+    this.subs.push(watcher); 
+}
+```
+
+下面就比较好理解了，我们在修改属性值时调用`dep.notify`通知更新即可，因为此时该属性的收集器存放着该属性对应的`watcher`。
+
+我们调用`watcher.update`告诉`watcher`要更新了，`get`方法就是调用了传入的`fn`函数，也就是`vm._update(vm._render())`。
+
+至此，实现了数据驱动视图。
+
+```javascript
+ set(newValue) {
+      if (newValue === value) return;
+      observe(newValue);
+      value = newValue;
+      dep.notify();//通知更新
+ },
+```
+
+```javascript
+notify(){
+    this.subs.forEach(watcher=>watcher.update()); //告诉watcher要更新了
+}
+```
+
+```javascript
+ update() {
+    //属性更新重新渲染
+    this.get();
+ }
+```
+
+收集依赖里，每个属性有一个`dep`，属性是被观察者，`watcher`是观察者，属性变化了会通知观察者来更新，这就是设计模式里的经典模式——观察者模式。
 
