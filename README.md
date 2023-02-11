@@ -1028,4 +1028,122 @@ notify(){
 ```
 
 收集依赖里，每个属性有一个`dep`，属性是被观察者，`watcher`是观察者，属性变化了会通知观察者来更新，这就是设计模式里的经典模式——观察者模式。
+### 异步更新
+
+vue执行DOM更新是异步的， 只要是观察到数据变化， vue将会开启一个队列， 并缓冲在同一事件循环中发生的所有数据改变。 如果同一个watcher被多次触发，只会被推如到队列中一次。 在这种缓冲时去除重复数据对于避免不必要的计算，和DOM 操作非常重要。
+
+在我们用vue时，我们经常用到一个方法是this.$nextTick（可以理解为是一次异步操作），常用的场景是在进行获取数据后，需要对新视图进行下一步操作或者其他操作时，发现获取不到dom**。赋值操作只完成了数据模型的改变并没有完成视图更新，这个时候需要$nextTick，接下来我们试着实现一下这一部分。
+
+在之前的update方法中，我们直接使用了this.get()进行了渲染，在这里我们需要改成异步的，我们定义了queueWatcher函数，它用来把当前watcher暂存起来。
+
+```javascript
+ update() {
+    //属性更新重新渲染
+    //this.get();
+    queueWatcher(this); //把当前watcher暂存起来
+ }
+```
+
+在queueWatcher方法中，我们先定义了queue队列，用来存储watcher，然后对watcher进行了去重操作，这里我们需要明确的一点是，不管update执行多少次，刷新只执行一次，所以定义了一个pending用来防抖，就比如我们依次更改属性值，vm.name='a',vm.name='b'，这里update了两次，但我们只需要进行一次刷新操作，在第一次watcher进队列时，就把pending设为true了，那么下一次就不会进入if (!pending)里执行了，我们看到有一个nextTick方法，这个方法里有定时器相关操作，根据浏览器事件原理，定时器等同步代码执行完再执行，也就是说，第一次watcher进队列时，nextTick里的代码不会立即执行。
+
+```javascript
+//多次更新 只会把它们暂存到一个队列里，后面时间到了再执行更新操作
+let queue = [];
+let has = {};
+let pending = false; //防抖
+function queueWatcher(watcher) {
+  const id = watcher.id;
+  if (!has[id]) {
+    queue.push(watcher);
+    has[id] = true;
+    //不管update执行多少次 刷新只执行一次
+    if (!pending) {
+      //定时器等同步代码执行完再执行 不会立即执行
+      nextTick(flushSchedulerQueue, 0);
+      pending = true;
+    }
+  }
+}
+```
+
+我们来看一下nextTick的内部实现，定义了一个callbacks数组，用来维护nextTick中的callback方法，waiting和上面的pending是一个道理，其中timerFunc里有定时器相关方法，也不会立即执行。
+
+这里我们总结一下，多次执行变成一步，只需要定义一下变量然后开一个异步方法就可以了。
+
+我们要注意的是，nextTick中没有直接使用某个api，而是采用优雅降级的方式，内部先采用的是promise，如果浏览器不兼容，用MutationObserver，它也是个异步的方法，再不兼容，考虑ie专享的，setImmediate。我们可以看到在异步里直接调用flushCallbacks方法，这个就是按照顺序依次执行传入的回调。
+
+这里说一下let observer = new MutationObserver(flushCallbacks)，这里传入的回调是异步执行，所以下面定义了一个文本节点然后监听文本的变化，文本从1变成2，回调函数就执行了。
+
+```javascript
+let callbacks = [];
+let waiting = false;
+//异步批处理
+function flushCallbacks() {
+  let cbs = callbacks.slice(0);
+  waiting = false;
+  callbacks = [];
+  cbs.forEach((cb) => cb()); //按照顺序依次执行
+}
+let timerFunc;
+if (Promise) {
+  timerFunc = () => {
+    Promise.resolve().then(flushCallbacks);
+  };
+} else if (MutationObserver) {
+  let observer = new MutationObserver(flushCallbacks); //这里传入的回调是异步执行
+  let textNode = document.createTextNode(1);
+  observer.observe(textNode, {
+    characterData: true,
+  });
+  timerFunc = () => {
+    textNode.textContent = 2;
+  };
+} else if (setImmediate) {
+  timerFunc = () => {
+    setImmediate(flushCallbacks);
+  };
+} else {
+  timerFunc = () => {
+    setTimeout(flushCallbacks);
+  };
+}
+export function nextTick(cb) {
+  callbacks.push(cb); //维护nextTick中的callback方法
+  if (!waiting) {
+    // setTimeout(() => {
+    //   flushCallbacks(); //最后一起刷新
+    // }, 0);
+    timerFunc();
+    waiting = true;
+  }
+}
+
+```
+
+回到queueWatcher函数，我们在nextTick里传入的回调是flushSchedulerQueue，这个就是刷新调度队列的函数了，刷新的过程中，可能还有新的watcher，重新放到queue中。run方法就是Watcher类上的方法，里面执行更新渲染操作。
+
+```javascript
+//刷新调度队列
+function flushSchedulerQueue() {
+  let flushQueue = queue.slice(0);
+  queue = [];
+  has = {};
+  pending = false;
+  flushQueue.forEach((q) => q.run()); //刷新的过程中 可能还有新的watcher 重新放到queue中
+}
+```
+
+```javascript
+run() {
+    this.get();
+}
+```
+
+至此我们知道了，nextTick不是创建了一个异步任务，而是将这个任务维护到了队列里。
+
+最后为了测试一下方法是否正确，我们在原型上挂载一下nextTick。
+
+```javascript
+Vue.prototype.$nextTick = nextTick
+```
 
