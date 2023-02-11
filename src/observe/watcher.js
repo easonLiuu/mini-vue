@@ -33,7 +33,83 @@ class Watcher {
   }
   update() {
     //属性更新重新渲染
+    //this.get();
+    queueWatcher(this); //把当前watcher暂存起来
+  }
+  run() {
     this.get();
+  }
+}
+//多次更新 只会把它们暂存到一个队列里，后面时间到了再执行更新操作
+let queue = [];
+let has = {};
+let pending = false; //防抖
+//刷新调度队列
+function flushSchedulerQueue() {
+  let flushQueue = queue.slice(0);
+  queue = [];
+  has = {};
+  pending = false;
+  flushQueue.forEach((q) => q.run()); //刷新的过程中 可能还有新的watcher 重新放到queue中
+}
+function queueWatcher(watcher) {
+  const id = watcher.id;
+  if (!has[id]) {
+    queue.push(watcher);
+    has[id] = true;
+    //不管update执行多少次 刷新只执行一次
+    if (!pending) {
+      //定时器等同步代码执行完再执行 不会立即执行
+      nextTick(flushSchedulerQueue, 0);
+      pending = true;
+    }
+  }
+}
+
+let callbacks = [];
+let waiting = false;
+//异步批处理
+function flushCallbacks() {
+  let cbs = callbacks.slice(0);
+  waiting = false;
+  callbacks = [];
+  cbs.forEach((cb) => cb()); //按照顺序依次执行
+}
+
+//nextTick中没有直接使用某个api,而是采用优雅降级的方式
+//内部先采用的是promise  ie不兼容 所以用了MutationObserver 异步的 再不兼容 考虑ie专享的 setImmediate
+let timerFunc;
+if (Promise) {
+  timerFunc = () => {
+    Promise.resolve().then(flushCallbacks);
+  };
+} else if (MutationObserver) {
+  let observer = new MutationObserver(flushCallbacks); //这里传入的回调是异步执行
+  let textNode = document.createTextNode(1);
+  observer.observe(textNode, {
+    characterData: true,
+  });
+  timerFunc = () => {
+    textNode.textContent = 2;
+  };
+} else if (setImmediate) {
+  timerFunc = () => {
+    setImmediate(flushCallbacks);
+  };
+} else {
+  timerFunc = () => {
+    setTimeout(flushCallbacks);
+  };
+}
+export function nextTick(cb) {
+  //先内部还是先用户 不一定
+  callbacks.push(cb); //维护nextTick中的callback方法
+  if (!waiting) {
+    // setTimeout(() => {
+    //   flushCallbacks(); //最后一起刷新
+    // }, 0);
+    timerFunc();
+    waiting = true;
   }
 }
 
