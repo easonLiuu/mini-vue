@@ -1146,4 +1146,193 @@ run() {
 ```javascript
 Vue.prototype.$nextTick = nextTick
 ```
+### mixin与生命周期
+
+> mixin（混入），提供了一种非常灵活的方式，来分发 Vue 组件中的可复用功能。
+
+本质其实就是一个`js`对象，它可以包含我们组件中任意功能选项，如`data`、`components`、`methods`、`created`、`computed`等等
+
+我们只要将共用的功能以对象的方式传`mixin`选项中，当组件使用`mixin`对象时所有`mixin`对象的选项都将被混入该组件本身的选项中来。
+
+在日常的开发中，我们经常会遇到在不同的组件中经常会需要用到一些相同或者相似的代码，这些代码的功能相对独立。这时，可以通过`Vue`的`mixin`功能将相同或者相似的代码提出来。
+
+常用方法如下：
+
+```javascript
+      Vue.mixin({
+        created(){
+            console.log('create1')
+        }
+      })
+      Vue.mixin({
+        created(){
+            console.log('create2')
+        }
+      })
+```
+
+下面我们来看一看mixin的内部实现，mixin是全局上面的一个方法，所以我们定义initGlobalAPI用来初始化，里面定义了options对象和mixin静态方法，紧接着调用mergeOptions将用户的选项和全局上的options进行合并。比如下面：
+
+`{} {created:function(){}} => {created: [fn]}`
+
+`{created:[fn]} {created:function(){}} => {created:[fn,fn]}`
+
+最开始`options`上为空，我们混入了一个`created`，这时需要将`created`和`options`合并，因此此时的`options`里有一个`created`，紧接着我们有混入了一个`created`，那么继续合并。
+
+```javascript
+export function initGlobalAPI(Vue) {
+  //静态方法
+  Vue.options = {};
+  Vue.mixin = function (mixin) {
+    //将用户的选项和全局上的options进行合并
+    this.options = mergeOptions(this.options, mixin);
+    return this;
+  };
+}
+
+```
+
+最后在`index.js`里调用此函数用于初始化。
+
+```javascript
+function Vue(options) {
+  //默认调用_init
+  this._init(options);
+}
+Vue.prototype.$nextTick = nextTick;
+initMixin(Vue); //扩展init方法
+initLifeCycle(Vue);
+initGlobalAPI(Vue);
+export default Vue;
+```
+
+那`mergeOptions`里是如何实现合并逻辑的呢？我们首先循环`parent`，也就是之前的`options`，然后调用`mergeField`方法，紧接着循环新的，也就是新的混入，如果新混入的`key`在`parent`中没有的话，那么调用`mergeField`方法。关于`mergeField`方法就是详细的核心的合并逻辑了，我们先来看`else`后面的，这部分是基础类型的合并逻辑，我们优先采用新的，比如下面：我们肯定是使用a:2。
+
+```javascript
+      Vue.mixin({
+       a:1
+      })
+      Vue.mixin({
+       a:2
+      })
+```
+
+```javascript
+export function mergeOptions(parent, child) {
+  const options = {};
+  //循环老的
+  for (let key in parent) {
+    mergeField(key);
+  }
+  for (let key in child) {
+    const n = parent.hasOwnProperty(key);
+    if (!n) {
+      mergeField(key);
+    }
+  }
+  function mergeField(key) {
+    if (strats[key]) {
+      options[key] = strats[key](parent[key], child[key]);
+    } else {
+      //如果不在策略中以儿子为准
+      //优先采用儿子的
+      //策略模式减少ifelse
+      options[key] = child[key] || parent[key];
+    }
+  }
+  return options;
+}
+```
+
+而在`if`里面这些合并逻辑，是和生命周期方法有关的，这里我们采用了策略模式减少了`ifelse`，看一看`strats`的实现，这里在`LIFECYCLE`数组里只定义了两个生命周期，是为了简洁。循环`LIFECYCLE`添加生命周期方法。如果此时`p`和`c`都存在，那么我们就将其拼接在一起，如果只有`c`有，也就是第一次混入时，那么将其包装成一个数组。
+
+ `{} {created:function(){}} => {created: [fn]}`，此时`parent[key]`为空，第一次混入，包装成`[fn]`。
+ `{created:[fn]} {created:function(){}} => {created:[fn,fn]}`，第二次又混入了`created`方法，将其拼接。
+
+```javascript
+const strats = {};
+const LIFECYCLE = ["beforeCreate", "created"];
+LIFECYCLE.forEach((hook) => {
+  strats[hook] = function (p, c) {
+    // {} {created:function(){}} => {created: [fn]}
+    // {created:[fn]} {created;function(){}} => {created:[fn,fn]}
+    if (c) {
+      //儿子有 父亲有
+      if (p) {
+        //拼在一起
+        return p.concat(c);
+      } else {
+        return [c]; //儿子有 父亲没有 将儿子包装成数组
+      }
+    } else {
+      return p;
+    }
+  };
+});
+```
+
+此时我们只是把混入的合并了，那如果用户也定义了相同的生命周期方法呢？比如下面的`created`，该如何合并？
+
+```javascript
+      Vue.mixin({
+        created(){
+            console.log('create1')
+        }
+      })
+      Vue.mixin({
+        created(){
+            console.log('create2')
+        }
+      })
+      const vm = new Vue({
+        data() {
+          return {
+           ...
+          };
+        },
+        created(){
+            console.log('create3')
+        }
+      });
+```
+
+在初始化操作里，我们将用户的选项挂载到实例上，此时就可以将用户传的和全局配的(`this.constructor.options`)进行合并，最后挂载到`vm.$options`上。挂载完成后我们首先调用了`beforeCreate`生命周期函数，初始化状态结束后我们调用了`created`生命周期函数。
+
+```javascript
+ Vue.prototype._init = function (options) {
+    //vm.$options： 获取用户的配置
+    const vm = this;
+    vm.$options = mergeOptions(this.constructor.options, options);
+    callHook(vm, 'beforeCreate');
+    //初始化状态
+    initState(vm);
+    callHook(vm, 'created');
+    if (options.el) {
+      //实现数据的挂载
+      vm.$mount(options.el);
+    }
+  };
+```
+
+我们看一下`callHook`的实现，内部逻辑很简单，就是调用生命周期钩子函数，从`vm.$options[hook]`获取混入的和用户传的钩子函数合并后的的数组，然后循环依次执行，注意要将`this`指向当前`vue`实例。
+
+```javascript
+export function callHook(vm, hook) { //调用钩子函数
+  const handlers = vm.$options[hook];
+  if (handlers) {
+    handlers.forEach((handler) => handler.call(vm));
+  }
+}
+```
+
+`mergeOptions`方法中可以看出它大致分为几个步骤：
+
+- 校验混入对象的选项；
+- 判断混入对象是否有`mixin`选项，有则递归进行合并；
+- 定义一个 `options`，作为 `merge`的结果集；
+- 将前者的选项通过策略模式合并到`options`；
+- 后者中如果还存在其他的选项，则通过策略模式合并到`options`；
+- 返回合并的结果`options`；
+
+`mixin`的本质还是对象之间的合并，但是对不同对象和方法右不同的处理方式，对于普通对象，就是简单的对象合并类似于`Object.assign`(这部分没有说，有兴趣可以查看源码)，对于基础类型就是后面的覆盖前面的，而对于**生命周期上的方法，相同的则是合并到一个数组中，调用的时候依次调用。**
 
