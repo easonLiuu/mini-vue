@@ -1,6 +1,7 @@
 import { compileToFunction } from "./compiler";
-import { mountComponent } from "./lifecycle";
+import { callHook, mountComponent } from "./lifecycle";
 import { initState } from "./state";
+import { mergeOptions } from "./utils";
 
 export function initMixin(Vue) {
   //初始化操作
@@ -8,9 +9,13 @@ export function initMixin(Vue) {
     //vm.$options： 获取用户的配置
     const vm = this;
     //将用户的选项挂载到实例上
-    vm.$options = options;
+    //将用户传的和全局配的的进行合并
+    //定义的全局指令过滤器等 都会挂载到实例上
+    vm.$options = mergeOptions(this.constructor.options, options);
+    callHook(vm, 'beforeCreate');
     //初始化状态
     initState(vm);
+    callHook(vm, 'created');
     if (options.el) {
       //实现数据的挂载
       vm.$mount(options.el);

@@ -82,7 +82,7 @@ export function mountComponent(vm, el) {
     vm._update(vm._render());
   };
   const watcher = new Watcher(vm, updateComponent, true); //true用于标识是一个渲染Watcher
-  console.log(watcher)
+  console.log(watcher);
 
   //vm.$options.render()  虚拟节点
 
@@ -94,3 +94,9 @@ export function mountComponent(vm, el) {
 //核心流程 1.创造响应式数据 2.模版转换成ast语法树 3.ast语法树转换成render函数 4.后续每次数据更新可以只执行render函数 无需再次执行ast转换的过程
 //5.render函数会产生虚拟节点 使用响应式数据
 //根据生成的虚拟节点创建真实DOM
+export function callHook(vm, hook) { //调用钩子函数
+  const handlers = vm.$options[hook];
+  if (handlers) {
+    handlers.forEach((handler) => handler.call(vm));
+  }
+}
