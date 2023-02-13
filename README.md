@@ -1335,4 +1335,106 @@ export function callHook(vm, hook) { //调用钩子函数
 - 返回合并的结果`options`；
 
 `mixin`的本质还是对象之间的合并，但是对不同对象和方法右不同的处理方式，对于普通对象，就是简单的对象合并类似于`Object.assign`(这部分没有说，有兴趣可以查看源码)，对于基础类型就是后面的覆盖前面的，而对于**生命周期上的方法，相同的则是合并到一个数组中，调用的时候依次调用。**
+### 数组的依赖收集与更新
+
+上面我们通过覆盖数组原型重写数组方法的方式侦测到了数组中元素和新增元素的变化并把它们转换成了响应式的，但如何收集依赖并触发依赖更新视图呢，我们看一看这一部分。
+
+为什么`vm.arr.push(100)`不能更新视图呢？因为我们改变的不是`arr`属性，而是`arr`对象的数组对象，所以视图不会更新，因此我们需要给数组增加`dep`，如果数组新增了某一项，触发`dep`更新，这部分就是收集依赖。
+
+但此处需要注意一下，我们也需要给对象增加`dep`，后续用户新增了属性，要触发`dep`更新，不过这个和数组依赖收集没什么关系，主要和`vm.$set`方法有关系，这里就不再赘述。
+
+还要注意一点，之前是对象每一个属性都有一个`dep`，本节的`dep`一个数组或者一个对象的`dep`。
+
+```javascript
+		 const vm = new Vue({
+        el: "#app",
+        data: {
+          arr: [1, 2, 3, ['a', 'b']], //给数组增加dep 如果数组新增了某一项 触发dep更新
+          a: { a: 1 }, //给对象增加dep 后续用户新增了属性 触发dep更新
+        },
+      });
+      //vm.arr[0] = 100; //监控不到变化 只重写了数组方法
+     
+      setTimeout(() => {
+        vm.arr[3].push(100);
+      }, 1000);
+```
+
+`vue`中把`array`的依赖存在了`Observer`中，是因为我们要保证这个依赖在`getter`和拦截器中都可以访问到。在`getter`中访问并收集依赖。
+
+在`Observer`类中，`data`可能是对象也可能是数组，不管是什么，我们要给所有都要增加`dep`，都添加依赖收集功能。
+
+```javascript
+class Observer {
+  constructor(data) {
+    this.dep = new Dep(); //所有对象都要增加dep  给每个对象都添加依赖收集功能
+    //这个data可能是对象也可能是数组
+    ....
+  }
+  //循环对象属性 依次劫持
+  walk(data) {
+    //重新定义属性,性能差
+    Object.keys(data).forEach((key) => defineReactive(data, key, data[key]));
+  }
+  observeArray(data) {
+    //数组里的每一项进行观测，这里是为了如果数组里有引用类型（对象），可以检测到对象的变化
+    data.forEach((item) => observe(item));
+  }
+}
+```
+
+我们调用了`observe`函数，把`value`当作参数传了进去并拿到返回值，也就是`Observer`实例。实例上有`dep`了，我们就可以实现在`getter`中将收集依赖到`Observer`实例的`dep`中。也就是说，`childOb.dep`是用来收集依赖的。接下来通知依赖发生改变更新视图就可以了。
+
+如果`arr: [1, 2, 3, ['a', 'b']]`，我们`vm.arr.push(100)`，视图会发生改变。
+
+如果是`vm.arr[3].push(100)`这样的呢？
+
+所以我们要继续判断当前的`value`是不是数组，如果是，调用`dependArray`继续收集依赖。
+
+```javascript
+export function defineReactive(target, key, value) {
+  let childOb = observe(value); //childOb.dep 用来收集依赖的
+  let dep = new Dep(); //每一个属性都有一dep
+  //value存放在了闭包
+  Object.defineProperty(target, key, {
+    //取
+    get() {
+      if (Dep.target) {
+        dep.depend(); 
+        if (childOb) {
+          childOb.dep.depend();
+          if (Array.isArray(value)) {
+            dependArray(value);
+          }
+        }
+      }
+      return value;
+    },
+    //修改
+    ...
+  });
+}
+```
+
+`dependArray`的逻辑很简单，就是一个深层次嵌套递归操作，这里就不说了。
+
+```javascript
+//深层次嵌套会递归
+function dependArray(value) {
+  for (let i = 0; i < value.length; i++) {
+    let current = value[i];
+    current.__ob__ && current.__ob__.dep.depend();
+    if (Array.isArray(current)) {
+      dependArray(current);
+    }
+  }
+}
+```
+
+我们在拦截器中也可以访问到`dep`依赖，在数组拦截器里，当数组发生变化时，通知对应的`watcher`实现更新逻辑就可以了。
+
+```javascript
+ob.dep.notify(); //数组变化了通知对应的watcher实现更新逻辑
+```
+
 
