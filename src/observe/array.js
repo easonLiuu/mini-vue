@@ -28,6 +28,7 @@ methods.forEach((method) => {
       //对新增内容再次进行观测
       ob.observeArray(inserted);
     }
+    ob.dep.notify(); //数组变化了通知对应的watcher实现更新逻辑
     return result;
   };
 });

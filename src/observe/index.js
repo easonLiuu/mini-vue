@@ -3,6 +3,8 @@ import Dep from "./dep";
 
 class Observer {
   constructor(data) {
+    this.dep = new Dep(); //所有对象都要增加dep  给每个对象都添加依赖收集功能
+    //这个data可能是对象也可能是数组
     Object.defineProperty(data, "__ob__", {
       value: this,
       enumerable: false, //不可枚举 循环时无法获取
@@ -28,9 +30,18 @@ class Observer {
     data.forEach((item) => observe(item));
   }
 }
-
+//深层次嵌套会递归
+function dependArray(value) {
+  for (let i = 0; i < value.length; i++) {
+    let current = value[i];
+    current.__ob__ && current.__ob__.dep.depend();
+    if (Array.isArray(current)) {
+      dependArray(current);
+    }
+  }
+}
 export function defineReactive(target, key, value) {
-  observe(value); //对所有对象进行属性劫持
+  let childOb = observe(value); //对所有对象进行属性劫持 childOb.dep 用来收集依赖的 childOb.dep用来收集依赖
   let dep = new Dep(); //每一个属性都有一dep
   //value存放在了闭包
   Object.defineProperty(target, key, {
@@ -38,6 +49,12 @@ export function defineReactive(target, key, value) {
     get() {
       if (Dep.target) {
         dep.depend(); //让这个属性的收集器记住当前的watcher
+        if (childOb) {
+          childOb.dep.depend();
+          if (Array.isArray(value)) {
+            dependArray(value);
+          }
+        }
       }
       return value;
     },
@@ -46,7 +63,7 @@ export function defineReactive(target, key, value) {
       if (newValue === value) return;
       observe(newValue);
       value = newValue;
-      dep.notify();//通知更新
+      dep.notify(); //通知更新
     },
   });
 }
