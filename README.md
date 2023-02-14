@@ -1436,5 +1436,203 @@ function dependArray(value) {
 ```javascript
 ob.dep.notify(); //数组变化了通知对应的watcher实现更新逻辑
 ```
+### 实现computed计算属性
+
+先来回顾一下用法：
+
+```html
+    <div id="app">{{fullname}} {{fullname}}</div>
+    <script src="vue.js"></script>
+    <script>
+      const vm = new Vue({
+        el: "#app",
+        data: {
+          firstname: "L",
+          lastname: "JR",
+        },
+        //计算属性依赖的值发生变化才会重新执行用户方法 dirty属性
+        //默认计算属性不会立刻执行
+        //计算属性就是一个defineProperty
+        //计算属性也是一个watcher  默认渲染时会创造一个渲染watcher
+        //底层就是一个带有dirty属性的watcher
+        computed: {
+          //fullname(){
+          //    return this.firstname + this.lastname
+          //}
+          fullname: {
+            get() {
+              console.log('run')
+              return this.firstname + this.lastname;
+            },
+            set(newVal) {
+              console.log(newVal);
+            },
+          },
+        },
+      });
+      setTimeout(() => {
+        vm.firstname = "gg";  //执行计算属性watcher更新操作  dirty=true
+      }, 1000);
+```
+
+接下来试着实现一下它，在初始化状态`initState`时，这个状态可能是`data`、`watch`、`computed`等，因此我们要在`initState`里调用初始化计算属性的函数`initComputed`。
+
+```javascript
+export function initState(vm) {
+  const opts = vm.$options;
+  ...
+  if (opts.computed) {
+    initComputed(vm);
+  }
+}
+```
+
+看一下`initComputed`函数，我们首先获取了`computed`，在循环`computed`前，定义了`watchers`，它是用来保存计算属性`watcher`的，并将计算属性`watcher`保存到`vm`上，循环`computed`判断是函数还是对象，紧接着`new`了一个`Watcher`，将属性名作为`key`保存进了`watchers`中，前面说过计算属性就是一个`defineProperty`，所以调用了`defineComputed`定义属性。
+
+这里`lazy: true`的含义是懒执行，如果直接`new Watcher`，默认会执行`fn`，因此加了一个标识符号，只有取值的时候，才执行`fn`函数，也就是`get`函数。
+
+```javascript
+function initComputed(vm) {
+  const computed = vm.$options.computed;
+  //计算属性的所有watcher  方便后面取值
+  const watchers = (vm._ComputedWatcher = {}); //将计算属性watcher保存到vm上
+  for (let key in computed) {
+    let userDef = computed[key];
+    let fn = typeof userDef === "function" ? userDef : userDef.get;
+    //监控计算属性中get的变化
+    //如果直接new Watcher 默认会执行fn
+    //懒执行
+
+    watchers[key] = new Watcher(vm, fn, { lazy: true });
+    //定义属性
+    defineComputed(vm, key, userDef);
+  }
+  //console.log(computed)
+}
+```
+
+看一下`Watcher`中的改造，对`lazy`属性进行了判断。其中`dirty`含义是是否从缓存中拿值，这个我们后面说。
+
+```javascript
+class Watcher {
+  //不同组件有不同的Watcher  目前只有一个渲染根组件
+  constructor(vm, fn, options) {
+    this.id = id++;
+    this.renderWatcher = options;
+    this.getter = fn;
+    this.deps = []; //后续实现计算属性和清理工作要用
+    this.depsId = new Set();
+    this.lazy = options.lazy;
+    this.dirty = this.lazy; //缓存值
+    this.vm = vm;
+    this.lazy ? undefined : this.get();
+    //this.get(); //getter意味着调用这个函数可以发生取值操作
+  }
+  get() {
+    pushTarget(this);
+    let value = this.getter.call(this.vm);
+    popTarget();
+    return value;
+  }
+}
+```
+
+除此之外我们对`get`方法也进行了改造，我们定义了一个栈，渲染时将`watcher`入栈，渲染完出栈，至于为什么要改造成栈的形式，我们后面说。
+
+```javascript
+let stack = [];
+//渲染时将watcher入栈 渲染完出栈
+export function pushTarget(watcher){
+  stack.push(watcher);
+  Dep.target = watcher;
+}
+export function popTarget(){
+  stack.pop();
+  Dep.target = stack[stack.length - 1]
+}
+```
+
+接下来看一下`defineComputed`这个函数，因为上面说过计算属性就是一个`defineProperty`，需要能通过实例拿到对应的计算属性，因此定义了这个方法，在`get`中我们没有直接使用`getter`，因为计算属性有缓存，我们需要定义一个函数是和缓存有关的，如果直接写`getter`就没有缓存了。
+
+```javascript
+function defineComputed(target, key, userDef) {
+  //const getter = typeof userDef === 'function' ? userDef : userDef.get;
+  const setter = userDef.set || (() => {});
+  //可以通过实例拿到对应的属性
+  Object.defineProperty(target, key, {
+    //创造计算属性的watcher
+    get: createComputedGetter(key),
+    set: setter,
+  });
+}
+```
+
+然后我们看一下`createComputedGetter`这个函数，这个函数就是检测是否要执行这个`getter`，返回了一个函数，我们通过 `this._ComputedWatcher`获取到对应属性的`watcher`，然后判断当前`watcher`实例上的`dirty`，如果是true，那么需要计算。
+
+```javascript
+function createComputedGetter(key) {
+  return function () {
+    const watcher = this._ComputedWatcher[key]; //获取到对应属性的watcher
+    if (watcher.dirty) {
+      //如果是脏的 执行用户传入的函数
+      watcher.evaluate();
+    }
+    if (Dep.target) {
+      //计算属性出栈后 还要渲染watcher 应该让计算属性watcher里面的属性 也去收集上一层watcher
+      watcher.depend();
+    }
+    return watcher.value; //最后返回的是watcher上的值
+  };
+}
+```
+
+`Watcher`类中`evaluate`方法如下，我们就是调用了`get`方法获取到用户函数的返回值，并且结束后还要标识为脏数据。
+
+```javascript
+evaluate() {
+    this.value = this.get(); //获取到用户函数的返回值 并且还要标识为脏
+    this.dirty = false;
+}
+```
+
+此时问题来了，执行完`get`后，计算属性出栈了，那此时如果改变计算属性依赖的值，新的计算值能渲染到页面上吗？肯定是不行的，因为此时计算`watcher`依赖的属性收集的是当前的计算`watcher`，并不是渲染`watcher`，因此应该让计算属性`watcher`里面的属性，也去收集上一层`watcher`（渲染`watcher`)。
+
+如果此时`Dep.target`上还有值，那么调用当前`watcher`实例上的`depend`方法，这个方法先获取当前计算属性`watcher`所依赖的属性，然后这些属性再收集渲染`watcher`。
+
+```javascript
+ depend(){
+    let i = this.deps.length;
+    while(i--){
+        //让计算属性watcher也收集渲染watcher
+        this.deps[i].depend()
+    }
+  }
+```
+
+最后我们`return watcher.value`，返回的是`watcher`上的值。
+
+再把`update`方法改造一下，如果是计算属性，其依赖值发生变化，那么就要变成脏值。
+
+```javascript
+ update() {
+    //属性更新重新渲染
+    //this.get();
+    if (this.lazy) {
+      this.dirty = true;
+    } else {
+      queueWatcher(this); //把当前watcher暂存起来
+    }
+  }
+```
+
+总结一下：
+
+- 第一次渲染有栈，先放的是渲染`watcher`，渲染`watcher`在渲染时会去计算属性
+- 一取计算属性，就走到了`evaluate`，它会把当前的计算属性入栈
+- 我们走计算属性`watcher`时会取值，这个值是响应式数据，所以一定有`dep`，这两个`dep`会去收集计算属性`watcher `
+- 改动依赖的值，通知的是计算属性`watcher`，更新了`dirty`，但是页面不会重新渲染
+- 需要让依赖值记住渲染`watcher`，求完值之后，计算属性`watcher`出栈 ，此时`dep.target`是渲染`watcher`，调用`depend`就可以了
+
+所以说，计算属性的底层就是一个带有`dirty`属性的`watcher`。
 
 
