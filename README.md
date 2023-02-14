@@ -1594,8 +1594,21 @@ evaluate() {
     this.dirty = false;
 }
 ```
+再把`update`方法改造一下，如果是计算属性，其依赖值发生变化，那么就要变成脏值。
 
-此时问题来了，执行完`get`后，计算属性出栈了，那此时如果改变计算属性依赖的值，新的计算值能渲染到页面上吗？肯定是不行的，因为此时计算`watcher`依赖的属性收集的是当前的计算`watcher`，并不是渲染`watcher`，因此应该让计算属性`watcher`里面的属性，也去收集上一层`watcher`（渲染`watcher`)。
+```javascript
+update() {
+    //属性更新重新渲染
+    //this.get();
+    if (this.lazy) {
+      this.dirty = true;
+    } else {
+      queueWatcher(this); //把当前watcher暂存起来
+    }
+  }
+```
+
+此时问题来了，执行完`get`后，计算属性出栈了，那此时如果改变计算属性依赖的值，dirty确实变化了，重新计算了，但是新的计算值能渲染到页面上吗？肯定是不行的，因为此时计算`watcher`依赖的属性收集的是当前的计算`watcher`，并不是渲染`watcher`，因此应该让计算属性`watcher`里面的属性，也去收集上一层`watcher`（渲染`watcher`)。
 
 如果此时`Dep.target`上还有值，那么调用当前`watcher`实例上的`depend`方法，这个方法先获取当前计算属性`watcher`所依赖的属性，然后这些属性再收集渲染`watcher`。
 
@@ -1611,20 +1624,6 @@ evaluate() {
 
 最后我们`return watcher.value`，返回的是`watcher`上的值。
 
-再把`update`方法改造一下，如果是计算属性，其依赖值发生变化，那么就要变成脏值。
-
-```javascript
- update() {
-    //属性更新重新渲染
-    //this.get();
-    if (this.lazy) {
-      this.dirty = true;
-    } else {
-      queueWatcher(this); //把当前watcher暂存起来
-    }
-  }
-```
-
 总结一下：
 
 - 第一次渲染有栈，先放的是渲染`watcher`，渲染`watcher`在渲染时会去计算属性
@@ -1634,5 +1633,3 @@ evaluate() {
 - 需要让依赖值记住渲染`watcher`，求完值之后，计算属性`watcher`出栈 ，此时`dep.target`是渲染`watcher`，调用`depend`就可以了
 
 所以说，计算属性的底层就是一个带有`dirty`属性的`watcher`。
-
-
