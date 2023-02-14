@@ -13,7 +13,7 @@ export function initMixin(Vue) {
     //定义的全局指令过滤器等 都会挂载到实例上
     vm.$options = mergeOptions(this.constructor.options, options);
     callHook(vm, 'beforeCreate');
-    //初始化状态
+    //初始化状态 初始化计算属性 watch
     initState(vm);
     callHook(vm, 'created');
     if (options.el) {

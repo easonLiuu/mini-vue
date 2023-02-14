@@ -22,5 +22,15 @@ class Dep {
   }
 }
 Dep.target = null;
+let stack = [];
+//渲染时将watcher入栈 渲染完出栈
+export function pushTarget(watcher){
+  stack.push(watcher);
+  Dep.target = watcher;
+}
+export function popTarget(){
+  stack.pop();
+  Dep.target = stack[stack.length - 1]
+}
 
 export default Dep;
