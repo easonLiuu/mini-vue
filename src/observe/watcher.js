@@ -8,16 +8,24 @@ let id = 0;
 //每个属性有一个dep 属性是被观察者 watcher是观察者 属性变化了会通知观察者来更新 观察者模式
 class Watcher {
   //不同组件有不同的Watcher  目前只有一个渲染根组件
-  constructor(vm, fn, options) {
+  constructor(vm, exprOrFn, options, cb) {
     this.id = id++;
     this.renderWatcher = options;
-    this.getter = fn;
+    if (typeof exprOrFn === "string") {
+      this.getter = function () {
+        return vm[exprOrFn]; //vm.firstname
+      };
+    } else {
+      this.getter = exprOrFn;
+    }
     this.deps = []; //后续实现计算属性和清理工作要用
     this.depsId = new Set();
     this.lazy = options.lazy;
+    this.cb = cb;
     this.dirty = this.lazy; //缓存值
     this.vm = vm;
-    this.lazy ? undefined : this.get();
+    this.user = options.user; //标识是不是用户自己watcher
+    this.value = this.lazy ? undefined : this.get();
     //this.get(); //getter意味着调用这个函数可以发生取值操作
   }
   addDep(dep) {
@@ -43,11 +51,11 @@ class Watcher {
     popTarget();
     return value;
   }
-  depend(){
+  depend() {
     let i = this.deps.length;
-    while(i--){
-        //让计算属性watcher也收集渲染watcher
-        this.deps[i].depend()
+    while (i--) {
+      //让计算属性watcher也收集渲染watcher
+      this.deps[i].depend();
     }
   }
   update() {
@@ -61,7 +69,11 @@ class Watcher {
     }
   }
   run() {
-    this.get();
+    let oldValue = this.value;
+    let newValue = this.get();
+    if(this.user){
+        this.cb.call(this.vm, newValue, oldValue);
+    }
   }
 }
 //多次更新 只会把它们暂存到一个队列里，后面时间到了再执行更新操作
