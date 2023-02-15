@@ -1633,3 +1633,138 @@ update() {
 - 需要让依赖值记住渲染`watcher`，求完值之后，计算属性`watcher`出栈 ，此时`dep.target`是渲染`watcher`，调用`depend`就可以了
 
 所以说，计算属性的底层就是一个带有`dirty`属性的`watcher`。
+### 实现watch属性
+
+我们先来看一下这个属性的用法，它一个对象，其中键是需要的观察的表达式，值是对应的回调函数。我们知道`vue`里有一个`vm.$watch`方法，它就是对一个目标进行监控，一旦该目标变化了的话，就会触发注册的回调函数。`vue`实例会在实例化调用`vm.$watch()`遍历`watch`对象的每一个属性。
+
+```javascript
+      const vm = new Vue({
+        el: "#app",
+        data: {
+          firstname: "L",
+          lastname: "JR",
+        },
+        watch: {
+          //直接写函数
+          firstname(newValue, oldValue){
+              console.log('ok')
+              console.log('222', newValue, oldValue)
+          }
+        //   firstname: [ //数组形式
+        //     (newValue, oldValue) => {
+        //       console.log(newValue);
+        //     },
+        //     (newValue, oldValue) => {
+        //       console.log(newValue);
+        //     },
+        //   ],
+        //   firstname:'fn' //fn是methods里定义的方法 我们这里省略了
+        },
+      });
+      //就算上面的方式，也会被转换成$watch的写法
+      vm.$watch(
+        () => vm.firstname,
+        (newValue, oldValue) => {
+          console.log(newValue);
+        }
+      );
+      setTimeout(() => {
+        vm.firstname = "gg"; 
+      }, 1000);
+```
+
+接着我们尝试实现它，首先在初始化状态时我们判断用户是否传入了`watch`，如果传入则调用`initWatch`方法初始化`watch`。
+
+```javascript
+export function initState(vm) {
+  const opts = vm.$options;
+  ...
+  if (opts.watch) {
+    initWatch(vm);
+  }
+}
+```
+
+接下来我们看一下`initWatch`的实现，使用`for...in`循环遍历`watch`对象，得到对象值并赋值给`handler`，根据官方给的用法，`handler`可能是数组、方法名(字符串)、函数等，根据`handler`的类型走不同的逻辑，但都是调用了`createWatcher`方法。
+
+```javascript
+function initWatch(vm) {
+  let watch = vm.$options.watch;
+  for (let key in watch) {
+    //字符串数组函数
+    const handler = watch[key];
+    if (Array.isArray(handler)) {
+      for (let i = 0; i < handler.length; i++) {
+        createWatcher(vm, key, handler[i]);
+      }
+    } else {
+      createWatcher(vm, key, handler);
+    }
+  }
+}
+```
+
+看一下`createWatcher`方法，首先判断传入的`handler`是否为字符串，如果是，说明这个字符串的值是一个方法名，在`methods`方法里，在初始化`methods`时我们将每一个方法挂载到了实例上，所以可以直接通过`vm[handler]`获取这个方法，最后赋给`handler`。然后调用`vm.$watch`将`watch`对象的键和值(`handler`)传入。也就是说，无论`watch`写成什么样，最终都会调用`vm.$watch`这个方法。
+
+```javascript
+function createWatcher(vm, key, handler) {
+  if (typeof handler === "string") {
+    handler = vm[handler];
+  }
+  return vm.$watch(key, handler);
+}
+```
+
+定义一下`$watch`方法，里面就是`new`了一个`Watcher`，其中`{user:true}`代表用户自己写的`watcher`，后面会用到，`cb`就是回调函数，也就是`watch`对象的值。这里注意一个问题，`exprOrFn`就是上面的`key`，它既有可能是表达式，也可能是一个函数，因此需要改动一下`Watcher`类。
+
+```javascript
+Vue.prototype.$watch = function(exprOrFn, cb){
+    //firstname
+    //()=>vm.firstname
+    //{user:true} 代表用户自己写的watcher
+    //firstname值变化了 直接执行cb函数
+    new Watcher(this, exprOrFn, {user:true}, cb)
+}
+```
+
+在`Watcher`类中，需要判断`exprOrFn`的类型，如果是函数好说，如果不是函数需要将其包装成一个函数，比如是`firstname`，那么就需要包装成函数去取实例上的`firstname`的值，然后将传入的回调设为当前`watcher`实例上的回调。在`get`方法中，将第一次`getter`取到的值赋给`value`，当这个属性值发生改变时，会通知这个当前属性依赖收集器里面的所有`watcher`进行更新，也就是调用`run`方法，在`run`里获取新值以外，还要判断当前的`watcher`是不是自己的`watcher`，如果是，调用传入的回调函数，并将`newValue`和`oldValue`传入。
+
+```javascript
+class Watcher {
+  //不同组件有不同的Watcher  目前只有一个渲染根组件
+  constructor(vm, exprOrFn, options, cb) {
+    ...
+    if (typeof exprOrFn === "string") {
+      this.getter = function () {
+        return vm[exprOrFn]; //vm.firstname
+      };
+    } else {
+      this.getter = exprOrFn;
+    }
+    this.cb = cb;
+    this.user = options.user; //标识是不是用户自己watcher
+    ...
+  }
+  ...
+  get() {
+    //让dep和watcher关联起来 把当前Watcher挂在全局上
+    // Dep.target = this; //静态属性只有一份
+    // this.getter(); //会去vm上取值
+    // Dep.target = null; //渲染完毕后清空
+    pushTarget(this);
+    let value = this.getter.call(this.vm);
+    popTarget();
+    return value;
+  }
+  ...
+  run() {
+    let oldValue = this.value;
+    let newValue = this.get();
+    if(this.user){
+        this.cb.call(this.vm, newValue, oldValue);
+    }
+  }
+}
+```
+
+所以说，无论是`watch`属性，还是`computed`计算属性，都是对`Watcher`的一种封装。
