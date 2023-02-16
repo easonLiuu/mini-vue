@@ -1,0 +1,132 @@
+import { isSameVNode } from ".";
+
+export function createElm(vnode) {
+  let { tag, data, children, text } = vnode;
+  if (typeof tag === "string") {
+    vnode.el = document.createElement(tag); //这里将真实节点和虚拟节点对应起来 后面如果修改属性了 可以直接找到虚拟节点对应的真实节点
+    //更新属性
+    patchProps(vnode.el, {}, data);
+    children.forEach((child) => {
+      vnode.el.appendChild(createElm(child));
+    });
+  } else {
+    vnode.el = document.createTextNode(text);
+  }
+  return vnode.el;
+}
+
+export function patchProps(el, oldProps, props) {
+  //老的属性中有要删除老的 新的没有
+  let oldStyles = oldProps.style || {};
+  let newStyles = props.style || {};
+  for (let key in oldStyles) {
+    //老的样式中有新的 没有删除
+    if (!newStyles[key]) {
+      el.style[key] = "";
+    }
+  }
+
+  for (let key in oldProps) {
+    //老的属性中有
+    if (!props[key]) {
+      //新的没有删除属性
+      el.removeAttribute(key);
+    }
+  }
+
+  for (let key in props) {
+    //新的覆盖老的
+    if (key === "style") {
+      //style{color: 'red'}
+      for (let styleName in props.style) {
+        el.style[styleName] = props.style[styleName];
+      }
+    } else {
+      el.setAttribute(key, props[key]);
+    }
+  }
+}
+
+export function patch(oldVNode, vnode) {
+  //初渲染流程
+  const isRealElement = oldVNode.nodeType;
+  if (isRealElement) {
+    const elm = oldVNode; //获取真实元素
+    const parentElm = elm.parentNode; //拿到父元素
+    //创建真实元素
+    let newEle = createElm(vnode);
+    parentElm.insertBefore(newEle, elm.nextSibling); //先插入再删 否则顺序会乱
+    parentElm.removeChild(elm); //删除老节点
+    return newEle;
+  } else {
+    //1.两个节点不是同一个节点 直接删除老节点 换上新节点 无比对
+    //2.两个节点是同一个节点 判断节点的tag和key 比较两个节点的属性是否有差异
+    //复用老节点 将差异的属性更新
+    //3.节点比较完毕后比较两人的儿子
+    return patchVNode(oldVNode, vnode);
+  }
+}
+
+function patchVNode(oldVNode, vnode) {
+  if (!isSameVNode(oldVNode, vnode)) {
+    //用老节点的父亲进行替换
+    let el = createElm(vnode);
+    oldVNode.el.parentNode.replaceChild(el, oldVNode.el);
+    return el;
+  }
+  //文本的情况 文本我们期望比较文本的内容 undefined
+  let el = (vnode.el = oldVNode.el); //复用老节点的元素
+  if (!oldVNode.tag) {
+    //是文本
+    if (!oldVNode.text !== vnode.text) {
+      el.textContent = vnode.text; //用新的文本覆盖掉老的
+    }
+  }
+  //是标签 需要比对标签的属性
+  patchProps(el, oldVNode.data, vnode.data);
+  //console.log(oldVNode, vnode);
+  //比较儿子节点 比较的时候 一方有儿子 一方没儿子
+  //两方都有儿子
+  let oldChildren = oldVNode.children || [];
+  let newChildren = vnode.children || [];
+  console.log(oldChildren, newChildren);
+  if (oldChildren.length > 0 && newChildren.length > 0) {
+    //完整diff 需要比较两个人的儿子
+    updateChildren(el, oldChildren, newChildren);
+  } else if (newChildren.length > 0) {
+    //没有老的有新的
+    mountChildren(el, newChildren);
+  } else if (oldChildren.length > 0) {
+    //新的没有老的有 删除
+    el.innerHTML = ""; //这里可以循环删除 就简写了
+  }
+  return el;
+}
+function mountChildren(el, newChildren) {
+  for (let i = 0; i < newChildren.length; i++) {
+    let child = newChildren[i];
+    el.appendChild(createElm(child));
+  }
+}
+function updateChildren(el, oldChildren, newChildren){
+    //操作列表经常会使用 push shift pop unshift reverse sort 针对这些情况做优化
+    //vue2采用双指针的方式比较两个节点
+    let oldStartIndex = 0;
+    let newStartIndex = 0;
+    let oldEndIndex = oldChildren.length - 1;
+    let newEndIndex = newChildren.length - 1;
+
+    let oldStartVNode = oldChildren[0];
+    let newStartVNode = newChildren[0];
+
+    let oldEndVNode = oldChildren[oldEndIndex];
+    let newEndVNode = newChildren[newEndIndex];
+
+
+    //为了比较两个儿子 增高性能 有一些优化手段
+    //console.log(el, oldChildren, newChildren)
+    console.log(oldStartVNode,newStartVNode,oldEndVNode,newEndVNode)
+    while(oldStartIndex <= oldEndIndex && newStartIndex <= newEndIndex){
+        //双方有一方头指针大于尾部则停止循环
+    }
+}

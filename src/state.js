@@ -1,6 +1,6 @@
 import Dep from "./observe/dep";
 import { observe } from "./observe/index";
-import Watcher from "./observe/watcher";
+import Watcher, { nextTick } from "./observe/watcher";
 
 export function initState(vm) {
   //获取用户选项
@@ -112,3 +112,16 @@ function createComputedGetter(key) {
 //我们走计算属性watcher时会取值 响应式数据 都有dep 这两个dep会去收集计算属性watcher
 //改动firstname通知的是计算属性watcher 更新了dirty 但是页面不会重新渲染
 //需要让firstname lastname记住渲染watcher   求完值之后 计算属性watcher出栈  此时dep.target是渲染watcher 调用depend就可以了
+
+export function initStateMixin(Vue) {
+  Vue.prototype.$nextTick = nextTick;
+  //最终都会调用这个方法
+  Vue.prototype.$watch = function (exprOrFn, cb) {
+    console.log(exprOrFn, cb);
+    //firstname
+    //()=>vm.firstname
+    //{user:true} 代表用户自己写的watcher
+    //firstname值变化了 直接执行cb函数
+    new Watcher(this, exprOrFn, { user: true }, cb);
+  };
+}
