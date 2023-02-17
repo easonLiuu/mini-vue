@@ -1768,3 +1768,119 @@ class Watcher {
 ```
 
 所以说，无论是`watch`属性，还是`computed`计算属性，都是对`Watcher`的一种封装。
+### 基础diff
+
+在之前的更新视图操作中，我们都是直接将新的替换DOM掉了老的DOM，这样对性能开销很大，因此应该将新的虚拟DOM和老的虚拟DOM进行一个对比，比较区别之后再替换，这就是我们说的`diff`算法，注意`diff`算法是一个平级比较的过程，父亲和父亲比对，儿子和儿子比对。
+
+我们先来看一下基础`diff`流程：
+
+- 判断两个节点是不是同一个节点，如果不是，直接删除老节点，换上新节点，无比对过程
+- 如果是同一个节点，判断节点的`tag`和`key`，比较两个节点的属性是否有差异，如果有差异，复用老节点，将差异的属性更新
+- 节点比较完毕后比较两人的儿子
+
+下面我们完善`patch`函数，`if`里的逻辑是初渲染逻辑，这部分之前说过，我们主要看一下`else`里的逻辑，`return`了`patchVNode`函数。顾名思义，`patchVNode`函数就是比较新的虚拟DOM和老的虚拟DOM之间的差异的。
+
+```javascript
+export function patch(oldVNode, vnode) {
+  //初渲染流程
+  const isRealElement = oldVNode.nodeType;
+  if (isRealElement) {
+   ...
+  } else {
+    return patchVNode(oldVNode, vnode);
+  }
+}
+```
+
+下面看一下`patchVNode`的函数逻辑，首先调用`isSameVNode`方法判断两个节点是不是同一个节点，如果不是，那么没有比较过程，直接用老节点的父亲进行替换并返回新节点；如果是同一个节点，首先有一个特殊情况，节点的`tag`是`undefined`，可以判定为同一个节点，这种情况说明两个节点都是文本类型，我们期望比较文本的内容，首先复用老节点的元素，判断老节点的文本是否和新节点的文本相等，如果不相等，用新的文本覆盖掉老的。
+
+紧接着如果两个节点都是标签类型并且是同一个节点，就需要比对标签的属性，这里调用了`patchProps`方法。
+
+```javascript
+function patchVNode(oldVNode, vnode) {
+  if (!isSameVNode(oldVNode, vnode)) {
+    let el = createElm(vnode);
+    oldVNode.el.parentNode.replaceChild(el, oldVNode.el);
+    return el;
+  }
+  let el = (vnode.el = oldVNode.el); //复用老节点的元素
+  if (!oldVNode.tag) {
+    //是文本
+    if (!oldVNode.text !== vnode.text) {
+      el.textContent = vnode.text; //用新的文本覆盖掉老的
+    }
+  }
+  //是标签 需要比对标签的属性
+  patchProps(el, oldVNode.data, vnode.data);
+  //比较儿子节点 比较的时候 一方有儿子 一方没儿子
+  //两方都有儿子
+  let oldChildren = oldVNode.children || [];
+  let newChildren = vnode.children || [];
+  console.log(oldChildren, newChildren);
+  if (oldChildren.length > 0 && newChildren.length > 0) {
+    //完整diff 需要比较两个人的儿子
+    updateChildren(el, oldChildren, newChildren);
+  } else if (newChildren.length > 0) {
+    //没有老的有新的
+    mountChildren(el, newChildren);
+  } else if (oldChildren.length > 0) {
+    //新的没有老的有 删除
+    el.innerHTML = ""; //这里可以循环删除 就简写了
+  }
+  return el;
+}
+```
+
+我们对`patchProps`方法也进行了一下改造，我们要对`style`进行单独处理，如果老的样式中有新的没有的，需要删除，紧接着需要循环老的属性，如果老的属性中有而新的属性中没有，那么需要删除属性。
+
+```javascript
+export function patchProps(el, oldProps, props) {
+  let oldStyles = oldProps.style || {};
+  let newStyles = props.style || {};
+  for (let key in oldStyles) {
+    if (!newStyles[key]) {
+      el.style[key] = "";
+    }
+  }
+
+  for (let key in oldProps) {
+    if (!props[key]) {
+      el.removeAttribute(key);
+    }
+  }
+
+  for (let key in props) {
+    //新的覆盖老的
+    if (key === "style") {
+      //style{color: 'red'}
+      for (let styleName in props.style) {
+        el.style[styleName] = props.style[styleName];
+      }
+    } else {
+      el.setAttribute(key, props[key]);
+    }
+  }
+}
+```
+
+这里补充一下`isSameVNode`方法的实现，只有`key`和`tag`都为`true`时才能判断两个节点是同一个节点。
+
+```javascript
+export function isSameVNode(vnode1, vnode2){
+  return vnode1.tag === vnode2.tag && vnode1.key === vnode2.key;
+}
+```
+
+紧接着需要比较新虚拟DOM和老虚拟DOM的儿子，如果两个节点都有儿子，那么调用`updateChildren`进行完整的`diff`，这个方法我们后面说；如果老的没有儿子但是新的有儿子，调用`mountChildren`方法，如果新的没有儿子，老的有儿子，那么直接删除。
+
+看一下`mountChildren`实现逻辑，其实就是对`newChildren`进行循环，拿到每一个虚拟DOM，然后调用`createElm`创建真实节点并插入到父节点中。
+
+```javascript
+function mountChildren(el, newChildren) {
+  for (let i = 0; i < newChildren.length; i++) {
+    let child = newChildren[i];
+    el.appendChild(createElm(child));
+  }
+}
+```
+
