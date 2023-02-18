@@ -1863,7 +1863,7 @@ export function patchProps(el, oldProps, props) {
 }
 ```
 
-这里补充一下`isSameVNode`方法的实现，只有`key`和`tag`都为`true`时才能判断两个节点是同一个节点。
+这里补充一下`isSameVNode`方法的实现，判断老虚拟DOM和新虚拟DOM的`key`和`tag`，只有`key`和`tag`都为`true`时才能判断两个节点是同一个节点。
 
 ```javascript
 export function isSameVNode(vnode1, vnode2){
