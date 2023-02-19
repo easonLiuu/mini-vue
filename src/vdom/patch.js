@@ -15,7 +15,7 @@ export function createElm(vnode) {
   return vnode.el;
 }
 
-export function patchProps(el, oldProps, props) {
+export function patchProps(el, oldProps = {}, props = {}) {
   //老的属性中有要删除老的 新的没有
   let oldStyles = oldProps.style || {};
   let newStyles = props.style || {};
@@ -108,25 +108,73 @@ function mountChildren(el, newChildren) {
     el.appendChild(createElm(child));
   }
 }
-function updateChildren(el, oldChildren, newChildren){
-    //操作列表经常会使用 push shift pop unshift reverse sort 针对这些情况做优化
-    //vue2采用双指针的方式比较两个节点
-    let oldStartIndex = 0;
-    let newStartIndex = 0;
-    let oldEndIndex = oldChildren.length - 1;
-    let newEndIndex = newChildren.length - 1;
+function updateChildren(el, oldChildren, newChildren) {
+  //操作列表经常会使用 push shift pop unshift reverse sort 针对这些情况做优化
+  //vue2采用双指针的方式比较两个节点
+  let oldStartIndex = 0;
+  let newStartIndex = 0;
+  let oldEndIndex = oldChildren.length - 1;
+  let newEndIndex = newChildren.length - 1;
 
-    let oldStartVNode = oldChildren[0];
-    let newStartVNode = newChildren[0];
+  let oldStartVNode = oldChildren[0];
+  let newStartVNode = newChildren[0];
 
-    let oldEndVNode = oldChildren[oldEndIndex];
-    let newEndVNode = newChildren[newEndIndex];
+  let oldEndVNode = oldChildren[oldEndIndex];
+  let newEndVNode = newChildren[newEndIndex];
 
-
-    //为了比较两个儿子 增高性能 有一些优化手段
-    //console.log(el, oldChildren, newChildren)
-    console.log(oldStartVNode,newStartVNode,oldEndVNode,newEndVNode)
-    while(oldStartIndex <= oldEndIndex && newStartIndex <= newEndIndex){
-        //双方有一方头指针大于尾部则停止循环
+  //为了比较两个儿子 增高性能 有一些优化手段
+  //console.log(el, oldChildren, newChildren)
+  console.log(oldStartVNode, newStartVNode, oldEndVNode, newEndVNode);
+  while (oldStartIndex <= oldEndIndex && newStartIndex <= newEndIndex) {
+    //双方有一方头指针大于尾部则停止循环
+    if (isSameVNode(oldStartVNode, newStartVNode)) {
+      patchVNode(oldStartVNode, newStartVNode); //如果是相同节点 递归比较子节点
+      oldStartVNode = oldChildren[++oldStartIndex];
+      newStartVNode = newChildren[++newStartIndex];
+      //比较开头节点
+    } else if (isSameVNode(oldEndVNode, newEndVNode)) {
+      patchVNode(oldEndVNode, newEndVNode);
+      oldEndVNode = oldChildren[--oldEndIndex];
+      newEndVNode = newChildren[--newEndIndex];
+      //比较开头节点
     }
+    //交叉比对 abcd->dabc
+    else if (isSameVNode(oldEndVNode, newStartVNode)) {
+      patchVNode(oldEndVNode, newStartVNode);
+      //先移动再赋值
+      //老的尾部移动到老的前面 insertBefore具有移动性 将原来的元素移动走
+      el.insertBefore(oldEndVNode.el, oldStartVNode.el);
+      oldEndVNode = oldChildren[--oldEndIndex];
+      newStartVNode = newChildren[++newStartIndex];
+    } else if (isSameVNode(oldStartVNode, newEndVNode)) {
+      patchVNode(oldStartVNode, newEndVNode);
+      //先移动再赋值
+      //老的尾部移动到老的前面 insertBefore具有移动性 将原来的元素移动走
+      el.insertBefore(oldStartVNode.el, oldEndVNode.el.nextSibling);
+      oldStartVNode = oldChildren[++oldStartIndex];
+      newEndVNode = newChildren[--newEndIndex];
+    }
+  }
+  if (newStartIndex <= newEndIndex) {
+    //多余的插入进去
+    for (let i = newStartIndex; i <= newEndIndex; i++) {
+      let childEl = createElm(newChildren[i]);
+      //这里可能向后追加 也可能向前追加
+      //获取下一个元素
+      let anchor = newChildren[newEndIndex + 1]
+        ? newChildren[newEndIndex + 1].el
+        : null;
+      //el.appendChild(childEl);
+      //anchor为null时会认为是appendChild
+      el.insertBefore(childEl, anchor);
+    }
+  }
+  if (oldStartIndex <= oldEndIndex) {
+    //老的多了 删除老的
+    for (let i = oldStartIndex; i <= oldEndIndex; i++) {
+      //虚拟节点上有el属性
+      let childEl = oldChildren[i].el;
+      el.removeChild(childEl);
+    }
+  }
 }

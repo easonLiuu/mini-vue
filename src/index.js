@@ -22,6 +22,7 @@ let render1 = compileToFunction(`<ul style="color:red">
 <li key='a'>a</li>
 <li key='b'>b</li>
 <li key='c'>c</li>
+<li key='d'>d</li>
 </ul>`);
 let vm = new Vue({ data: { name: "zf" } });
 let prevVNode = render1.call(vm);
@@ -29,10 +30,10 @@ let el = createElm(prevVNode);
 document.body.appendChild(el);
 //用户自己操作DOM 会有问题
 let render2 = compileToFunction(`<ul style="color:blue">
-<li key='a'>a</li>
 <li key='b'>b</li>
 <li key='c'>c</li>
 <li key='d'>d</li>
+<li key='a'>a</li>
 </ul>`);
 let vm2 = new Vue({ data: { name: "zf" } });
 let nextVNode = render2.call(vm2);
