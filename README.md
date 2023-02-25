@@ -1883,4 +1883,184 @@ function mountChildren(el, newChildren) {
   }
 }
 ```
+### 完整diff
+
+在上一节中，我们说如果新节点和旧节点都有儿子的话，需要调用`updateChildren`比较两个节点的儿子，这就是完整的`diff`算法，目的是为了提高性能。我们知道，操作列表经常会使用`push`、`shift`、`pop`、`unshift`、`reverse`、`sort`这些方法，在`vue`中针对这些情况做了优化。`vue2`采用双指针的方式比较两个节点，我们看一下`updateChildren`的实现。
+
+我们先来看`while`循环，循环条件其实很容易看懂，双方有一方头指针大于尾部则停止循环，第一段`if`先跳过去，我们直接看核心代码：
+
+首先比较新前和旧前，如果他们是一个节点，则调用`patchVNode`比较节点属性，这个方法之前也讲过，就不再说了。随后将新节点和后节点的指针都后移一位。
+
+如果新前和旧前不是一个节点，那么比较新后和旧后，调用`patchVNode`，随后将新节点和后节点的指针都前移一位。
+
+如果新后和旧后不是一个节点(交叉比对：`abcd->dabc`)，那么比较新前和旧后，调用`patchVNode`，随后使用`insertBefore`将老的尾部移动到老的前面，注意`insertBefore`具有移动性，它会将原来的元素移动走，最后将旧节点的指针往前移动一位，将新节点的指针向后移动一位。
+
+如果新前和旧后不是一个节点(交叉比对：`abcd->bcda`)，那么比较新后和旧前，调用`patchVNode`，随后使用`insertBefore`将老的首部移动到老的尾部的下一位的前面，最后将旧节点的指针往后移动一位，将新节点的指针向前移动一位。
+
+```javascript
+function updateChildren(el, oldChildren, newChildren) {
+  let oldStartIndex = 0;
+  let newStartIndex = 0;
+  let oldEndIndex = oldChildren.length - 1;
+  let newEndIndex = newChildren.length - 1;
+
+  let oldStartVNode = oldChildren[0];
+  let newStartVNode = newChildren[0];
+
+  let oldEndVNode = oldChildren[oldEndIndex];
+  let newEndVNode = newChildren[newEndIndex];
+  function makeIndexByKey(children) {
+    let map = {};
+    children.forEach((child, index) => {
+      map[child.key] = index;
+    });
+    return map;
+  }
+  let map = makeIndexByKey(oldChildren);
+  
+  while (oldStartIndex <= oldEndIndex && newStartIndex <= newEndIndex) {
+    //空就跳过去
+    if (!oldStartVNode) {
+      oldStartVNode = oldChildren[++oldStartIndex];
+    } else if (!oldEndVNode) {
+      oldEndVNode = oldChildren[--oldEndIndex];
+    }
+    if (isSameVNode(oldStartVNode, newStartVNode)) {
+      patchVNode(oldStartVNode, newStartVNode); 
+      oldStartVNode = oldChildren[++oldStartIndex];
+      newStartVNode = newChildren[++newStartIndex];
+    } else if (isSameVNode(oldEndVNode, newEndVNode)) {
+      patchVNode(oldEndVNode, newEndVNode);
+      oldEndVNode = oldChildren[--oldEndIndex];
+      newEndVNode = newChildren[--newEndIndex];
+      //比较开头节点
+    }
+    //交叉比对 abcd->dabc
+    else if (isSameVNode(oldEndVNode, newStartVNode)) {
+      patchVNode(oldEndVNode, newStartVNode);
+      el.insertBefore(oldEndVNode.el, oldStartVNode.el);
+      oldEndVNode = oldChildren[--oldEndIndex];
+      newStartVNode = newChildren[++newStartIndex];
+    } else if (isSameVNode(oldStartVNode, newEndVNode)) {
+      patchVNode(oldStartVNode, newEndVNode);
+      el.insertBefore(oldStartVNode.el, oldEndVNode.el.nextSibling);
+      oldStartVNode = oldChildren[++oldStartIndex];
+      newEndVNode = newChildren[--newEndIndex];
+    }
+    else {
+      let moveIndex = map[newStartVNode.key];
+      if (moveIndex !== undefined) {
+        let moveVNode = oldChildren[moveIndex]; //找到对应的虚拟节点
+        el.insertBefore(moveVNode.el, oldStartVNode.el);
+        oldChildren[moveIndex] = undefined; //标识这个节点已经移走了
+        patchVNode(moveVNode, newStartVNode);
+      } else {
+        //找不到直接插入
+        el.insertBefore(createElm(newStartVNode), oldStartVNode.el);
+      }
+      newStartVNode = newChildren[++newStartIndex];
+    }
+  }
+  ...
+  if (oldStartIndex <= oldEndIndex) {
+    for (let i = oldStartIndex; i <= oldEndIndex; i++) {
+      if (oldChildren[i]) {
+        let childEl = oldChildren[i].el;
+        el.removeChild(childEl);
+      }
+    }
+  }
+}
+```
+
+那如果上面四种情况都不符合呢？这就是乱序比对了，我们根据老的列表做一个映射关系，用新的节点去找，找到则移动老节点，找不到添加，最后将多余的删除。`makeIndexByKey`这个函数就是做映射关系的。
+
+```javascript
+function makeIndexByKey(children) {
+    let map = {};
+    children.forEach((child, index) => {
+      map[child.key] = index;
+    });
+    return map;
+  }
+let map = makeIndexByKey(oldChildren);
+```
+
+用新的节点的`key`在映射关系里找，如果找到对应的虚拟节点，说明旧节点列表有这个节点，将这个虚拟节点插入到旧前的前面，然后将`key`对应的`value`设置为`undefined`，标识这个节点已经移走了，如果新的节点里找不到，那么直接插入，最后注意将新前的指针向后移动一位。
+
+```javascript
+      let moveIndex = map[newStartVNode.key];
+      if (moveIndex !== undefined) {
+        let moveVNode = oldChildren[moveIndex]; //找到对应的虚拟节点
+        el.insertBefore(moveVNode.el, oldStartVNode.el);
+        oldChildren[moveIndex] = undefined; //标识这个节点已经移走了
+        patchVNode(moveVNode, newStartVNode);
+      } else {
+        //找不到直接插入
+        el.insertBefore(createElm(newStartVNode), oldStartVNode.el);
+      }
+      newStartVNode = newChildren[++newStartIndex];
+```
+
+下面我们举个乱序比对的例子让你更好理解，假设旧节点是这样的：
+
+```html
+<ul>
+	<li key='a'>a</li>
+	<li key='b'>b</li>
+	<li key='c'>c</li>
+	<li key='d'>d</li>
+</ul>
+```
+
+新节点是这样的：
+
+```html
+<ul>
+	<li key='b'>b</li>
+	<li key='m'>m</li>
+	<li key='a'>a</li>
+	<li key='p'>p</li>
+	<li key='c'>c</li>
+	<li key='q'>q</li>
+</ul>
+```
+
+首先根据旧节点做一个映射关系，`{a:a,b:b,c:c,d:d}`
+
+- 最开始旧前指针指向`a`，新前指针指向`b`，根据`b`的`key`去映射关系表里找到了，那么将`b`移动到旧节点列表的最前面，此时旧节点列表为`b a undefined c d`
+- 找`m`，旧的里面没有，插入到旧前的前面，此时为`b m a undefined c d`
+- 找`a`，此时找到了，并且此时两个指针都指向`a`，不动，旧前和新前的指针都向后移动一位，旧前碰到了`undefined`，再向后移动一位
+- 找`p`，没有，插入到旧前的前面，此时为`b m a undefined p c d`
+- 找`c`，此时两个指针都指向`c`，不动，旧前和新前的指针都向后移动一位
+- 找`q`，没有，插入到旧前的前面，此时为`b m a undefined p c q d`，最后将`d`删除
+- 最后渲染出来的就是`b m a p c q`
+
+最后看两个细节，第一个细节是"老的多了，删除老的"这个逻辑中，需要增加`if (oldChildren[i])`，判断此时老节点上是否有值，因为此时可能已经被设置成了`undefined`。
+
+```javascript
+  if (oldStartIndex <= oldEndIndex) {
+    //老的多了 删除老的
+    for (let i = oldStartIndex; i <= oldEndIndex; i++) {
+      if (oldChildren[i]) {
+        //虚拟节点上有el属性
+        let childEl = oldChildren[i].el;
+        el.removeChild(childEl);
+      }
+    }
+  }
+```
+
+第二个细节是在`while`循环最开始时需要判断此时旧前和旧后指针指向的节点是否有值，因为此时值可能已经被设置成了`undefined`，如果被设置成了`undefined`需要再向后移动一位。
+
+```javascript
+    //空就跳过去
+    if (!oldStartVNode) {
+      oldStartVNode = oldChildren[++oldStartIndex];
+    } else if (!oldEndVNode) {
+      oldEndVNode = oldChildren[--oldEndIndex];
+    }
+```
+
+至此，diff算法就结束了。
 
