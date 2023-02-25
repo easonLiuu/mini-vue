@@ -121,11 +121,27 @@ function updateChildren(el, oldChildren, newChildren) {
 
   let oldEndVNode = oldChildren[oldEndIndex];
   let newEndVNode = newChildren[newEndIndex];
+  function makeIndexByKey(children) {
+    let map = {};
+    children.forEach((child, index) => {
+      map[child.key] = index;
+    });
+    return map;
+  }
+  let map = makeIndexByKey(oldChildren);
 
   //为了比较两个儿子 增高性能 有一些优化手段
   //console.log(el, oldChildren, newChildren)
+  //循环的时候为什么要加key？
+  //
   console.log(oldStartVNode, newStartVNode, oldEndVNode, newEndVNode);
   while (oldStartIndex <= oldEndIndex && newStartIndex <= newEndIndex) {
+    //空就跳过去
+    if (!oldStartVNode) {
+      oldStartVNode = oldChildren[++oldStartIndex];
+    } else if (!oldEndVNode) {
+      oldEndVNode = oldChildren[--oldEndIndex];
+    }
     //双方有一方头指针大于尾部则停止循环
     if (isSameVNode(oldStartVNode, newStartVNode)) {
       patchVNode(oldStartVNode, newStartVNode); //如果是相同节点 递归比较子节点
@@ -154,6 +170,22 @@ function updateChildren(el, oldChildren, newChildren) {
       oldStartVNode = oldChildren[++oldStartIndex];
       newEndVNode = newChildren[--newEndIndex];
     }
+    //给动态列表添加key的时候尽量避免用索引  可能会发生错误复用
+    else {
+      //乱序比对
+      //根据老的列表做一个映射关系 用新的去找 找到移动 找不到添加 最后删除多余的
+      let moveIndex = map[newStartVNode.key];
+      if (moveIndex !== undefined) {
+        let moveVNode = oldChildren[moveIndex]; //找到对应的虚拟节点
+        el.insertBefore(moveVNode.el, oldStartVNode.el);
+        oldChildren[moveIndex] = undefined; //标识这个节点已经移走了
+        patchVNode(moveVNode, newStartVNode);
+      } else {
+        //找不到直接插入
+        el.insertBefore(createElm(newStartVNode), oldStartVNode.el);
+      }
+      newStartVNode = newChildren[++newStartIndex];
+    }
   }
   if (newStartIndex <= newEndIndex) {
     //多余的插入进去
@@ -172,9 +204,11 @@ function updateChildren(el, oldChildren, newChildren) {
   if (oldStartIndex <= oldEndIndex) {
     //老的多了 删除老的
     for (let i = oldStartIndex; i <= oldEndIndex; i++) {
-      //虚拟节点上有el属性
-      let childEl = oldChildren[i].el;
-      el.removeChild(childEl);
+      if (oldChildren[i]) {
+        //虚拟节点上有el属性
+        let childEl = oldChildren[i].el;
+        el.removeChild(childEl);
+      }
     }
   }
 }

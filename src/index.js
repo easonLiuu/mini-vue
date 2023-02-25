@@ -31,9 +31,11 @@ document.body.appendChild(el);
 //用户自己操作DOM 会有问题
 let render2 = compileToFunction(`<ul style="color:blue">
 <li key='b'>b</li>
-<li key='c'>c</li>
-<li key='d'>d</li>
+<li key='m'>m</li>
 <li key='a'>a</li>
+<li key='p'>p</li>
+<li key='c'>c</li>
+<li key='q'>q</li>
 </ul>`);
 let vm2 = new Vue({ data: { name: "zf" } });
 let nextVNode = render2.call(vm2);
