@@ -7,9 +7,15 @@ export function initLifeCycle(Vue) {
   Vue.prototype._update = function (vnode) {
     const vm = this;
     const el = vm.$el;
-    console.log(vnode, el);
+    const prevVNode = vm._vnode;
+    vm._vnode = vnode; //把组件第一次产生的虚拟节点保存到_vnode上
+    if (prevVNode) {
+      //之前渲染过了
+      vm.$el = patch(prevVNode, vnode);
+    } else {
+      vm.$el = patch(el, vnode);
+    }
     //patch既有初始化的功能 又有更新的功能
-    vm.$el = patch(el, vnode);
   };
   //_c('div',{},...children)
   Vue.prototype._c = function () {
@@ -52,7 +58,8 @@ export function mountComponent(vm, el) {
 //核心流程 1.创造响应式数据 2.模版转换成ast语法树 3.ast语法树转换成render函数 4.后续每次数据更新可以只执行render函数 无需再次执行ast转换的过程
 //5.render函数会产生虚拟节点 使用响应式数据
 //根据生成的虚拟节点创建真实DOM
-export function callHook(vm, hook) { //调用钩子函数
+export function callHook(vm, hook) {
+  //调用钩子函数
   const handlers = vm.$options[hook];
   if (handlers) {
     handlers.forEach((handler) => handler.call(vm));
