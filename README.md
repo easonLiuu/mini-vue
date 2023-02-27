@@ -2063,4 +2063,175 @@ let map = makeIndexByKey(oldChildren);
 ```
 
 至此，diff算法就结束了。
+### 补充
+
+我们改造一下将虚拟dom变成真实dom这个逻辑，我们首先从`vm._vnode`上取值，如果没有值，说明是初始化渲染，直接`patch(el, vnode)`即可，初始化渲染时将组件第一次产生的虚拟节点保存到`_vnode`上，这样后面`vm._vnode`就有值了，`patch(prevVNode, vnode)`进行更新。之后的每一次渲染都会将当前产生的虚拟节点保存到`_vnode`上。
+
+```javascript
+export function initLifeCycle(Vue) {
+  Vue.prototype._update = function (vnode) {
+    const vm = this;
+    const el = vm.$el;
+    const prevVNode = vm._vnode;
+    vm._vnode = vnode; 
+    if (prevVNode) {
+      //之前渲染过了
+      vm.$el = patch(prevVNode, vnode);
+    } else {
+      vm.$el = patch(el, vnode);
+    }
+  };
+  ...
+}
+```
+
+### 实现组件的虚拟节点
+
+在实现组件的虚拟节点前，我们先来看一下`Vue.extend`，它属于 Vue 的全局 API，在实际业务开发中我们很少使用，因为相比常用的 `Vue.component`写法使用`extend`步骤要更加繁琐一些。但是在一些独立组件开发场景中，`Vue.extend + $mount`这对组合是我们需要去关注的。
+
+我们先来看一下`Vue.extend`的用法：
+
+```javascript
+      let Sub = Vue.extend({
+        template: "<div>子组件<my-button></my-button></div>",
+        components: {
+          "my-button": {
+            template: "<button>子组件自己声明的button</button>",
+          },
+        },
+      });
+      new Sub().$mount("#root");
+```
+
+可以看到，`extend`创建的是 Vue 构造器，而不是我们平时常写的组件实例，所以不可以通过 `new Vue({ components: testExtend })`来直接使用，需要通过`new Sub().$mount("#root")`来挂载到指定的元素上。
+
+那接下来，我们尝试实现一下`Vue.extend`，由于它是全局API，因此将这个静态方法定义在`initGlobalAPI`函数中，它根据用户参数返回一个构造函数，并在Sub这个构造函数里调用`_init`默认对子类进行初始化操作，但是Sub里为什么可以调用`_init`呢？_`_init`是定义在Vue上的呀！很显然这里用到了继承，关于继承这里就不再赘述了，不懂的可以看看红宝书，里面讲的很详细。接着调用了`mergeOptions`将用户传递的参数和全局的`Vue.options`合并，保存了用户传递的选项。关于为什么要合并，以及怎么合并，我们后面会说。
+
+```javascript
+export function initGlobalAPI(Vue) {
+  ...
+  //手动创造组件进行挂载
+  Vue.extend = function (options) {
+    //根据用户参数返回一个构造函数
+    function Sub(options = {}) {
+      //最后使用一个组件 就是new一个实例
+      this._init(options); //默认对子类进行初始化操作
+    }
+    Sub.prototype = Object.create(Vue.prototype); //Sub.prototype.__proto__ === Vue.prototype
+    Sub.prototype.constructor = Sub;
+    Sub.options = mergeOptions(Vue.options, options); //保存用户传递的选项
+    return Sub;
+  };
+ ...
+}
+```
+
+接下来我们`Vue.component`声明全局组件，首先回顾一下它的用法，在声明`template`时可以省略`Vue.extend`，但本质上还是调用了`Vue.extend`。
+
+```javascript
+      Vue.component( //Vue.options.components = {}
+        "my-button",
+        Vue.extend({
+          template: "<button>全局button</button>",
+        })
+      );
+```
+
+我们试着实现一下它，还是在`initGlobalAPI`函数中定义，声明全局组件时，这个组件要挂载到`options`上面，因此我们需要定义一个`Vue.options.components = {}`对象并维护在这个对象中，前面说到，声明`template`时可以省略`Vue.extend`，因此需要判断`definition`的类型，如果`definition`已经是函数，说明用户自己调用了`Vue.extend`，如果不是函数，调用`Vue.extend`。
+
+```javascript
+export function initGlobalAPI(Vue) {
+  ...
+  Vue.options.components = {};
+  //维护在这个对象中
+  Vue.component = function (id, definition) {
+    //如果definition已经是函数 说明用户自己调用了Vue.extend
+    definition =
+      typeof definition === "function" ? definition : Vue.extend(definition);
+
+    Vue.options.components[id] = definition;
+  };
+}
+```
+
+在上面`Vue.extend`用法示例中，我们声明了`components`，其中`key`是`my-button`，在使用`Vue.component`声明全局组件时，也声明了`my-button`，那么问题来了，`Vue.extend`用法示例中的`template`用到了`my-button`这个组件，那应该是使用哪个组件呢？显然没有一个层级的关系，因此我们需要处理一下这个问题，这就是上面所说的合并用户选项。
+
+因此在`utils.js`这个工具方法文件里我们在`strats`增加了`components`，里面返回的是构造的对象，可以拿到父亲原型上的属性，并且将儿子的都拷贝到自己身上。
+
+```javascript
+strats.components = function(parentVal, childVal){
+  const res = Object.create(parentVal)
+  if(childVal){
+    for(let key in childVal){
+      res[key] = childVal[key];
+    }
+  }
+  return res
+}
+```
+
+铺垫了这么多，下面就是实现组件的虚拟节点了。如何判断当前节点是组件节点还是普通节点呢？我们定义了一个函数用来判断，逻辑很简单。
+
+```javascript
+const isReservedTag = (tag) => {
+  return ["a", "div", "p", "button", "ul", "li", "span"].includes(tag);
+};
+```
+
+紧接着创建虚拟DOM里我们判断，如果是组件节点，创造组件的虚拟节点，注意节点里面包含组件的构造函数，`Ctor`就是组件的定义 可能是一个`Sub`类，还有可能是组件的`obj`选项，最后返回了`createComponentVNode`。
+
+```javascript
+export function createElementVNode(vm, tag, data, ...children) {
+  ...
+  if (isReservedTag(tag)) {
+    return vnode(vm, tag, key, data, children);
+  } else {
+    let Ctor = vm.$options.components[tag]; //组件的构造函数
+    return createComponentVNode(vm, tag, key, data, children, Ctor);
+  }
+}
+```
+
+看一下`createComponentVNode`方法，逻辑不难，如果`Ctor`是组件的`obj`选项，那么调用`extend`方法，注意，这个方法是全局API，是Vue上的，我们怎么拿到呢？在`initGlobalAPI`里我们在`options`上把Vue指向`_base`，所以我们`vm.$options._base`就可以拿到Vue了，然后调用`extend`方法，这其实是一个很骚的操作。最后返回了虚拟节点。
+
+稍后创造真实节点的时候如果是组件则调用`init`方法，这个后面再说。
+
+```javascript
+function createComponentVNode(vm, tag, key, data, children, Ctor) {
+  if (typeof Ctor === "object") {
+    Ctor = vm.$options._base.extend(Ctor);
+  }
+  data.hook = {
+    init(){  
+
+    }
+  }
+  return vnode(vm, tag, key, data, children, null, { Ctor });
+}
+```
+
+```javascript
+export function initGlobalAPI(Vue) {
+  Vue.options = {
+    _base: Vue
+  };
+ ...
+}
+```
+
+最后改造一下`vnode`方法，增加了`componentOptions`，包含组件的构造函数。
+
+```javascript
+function vnode(vm, tag, key, data, children, text, componentOptions) {
+  return {
+    vm,
+    tag,
+    key,
+    data,
+    children,
+    text,
+    componentOptions, //包含组件的构造函数
+  };
+}
+```
 
