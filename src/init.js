@@ -12,10 +12,10 @@ export function initMixin(Vue) {
     //将用户传的和全局配的的进行合并
     //定义的全局指令过滤器等 都会挂载到实例上
     vm.$options = mergeOptions(this.constructor.options, options);
-    callHook(vm, 'beforeCreate');
+    callHook(vm, "beforeCreate");
     //初始化状态 初始化计算属性 watch
     initState(vm);
-    callHook(vm, 'created');
+    callHook(vm, "created");
     if (options.el) {
       //实现数据的挂载
       vm.$mount(options.el);
@@ -33,9 +33,7 @@ export function initMixin(Vue) {
         template = el.outerHTML;
         //没有写模版 写了el
       } else {
-        if (el) {
-          template = ops.template; //如果有el 采用模版的内容
-        }
+        template = ops.template;
       }
       //写了template就用写了的template
       if (template) {
