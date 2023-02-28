@@ -2234,4 +2234,95 @@ function vnode(vm, tag, key, data, children, text, componentOptions) {
   };
 }
 ```
+### 实现组件的渲染逻辑
+
+在创建真实元素时，我们需要判断创建的是组件还是元素，因此对`createElm`进行了一些改造，调用`createComponent`判断创建的是否为组件，如果是，`return vnode.componentInstance.$el`，return的这个东西我们一会说。
+
+```javascript
+export function createElm(vnode) {
+  let { tag, data, children, text } = vnode;
+  if (typeof tag === "string") {
+    //创建真实元素 要区分组件还是元素
+    if (createComponent(vnode)) {
+      //vnode.componentInstance.$el
+      //组件
+      return vnode.componentInstance.$el;
+    }
+   ...
+}
+```
+
+那么是怎么判断的呢？看一下`createComponent`的内部逻辑，我们是取当前`vnode`下的`data`下的`hook`下的`init`，然后调用`init`初始化组件。
+
+```javascript
+function createComponent(vnode) {
+  let i = vnode.data;
+  if ((i = i.hook) && (i = i.init)) {
+    i(vnode); //初始化组件
+  }
+  if (vnode.componentInstance) {
+    return true;
+  }
+}
+```
+
+`init`函数具体做了什么？其实非常简单，我们取到了`Ctor`这个构造函数，并`new`了实例，并保存了组件的实例到虚拟节点上，最后调用`$mount`实现了挂载。
+
+```javascript
+function createComponentVNode(vm, tag, key, data, children, Ctor) {
+  if (typeof Ctor === "object") {
+    Ctor = vm.$options._base.extend(Ctor);
+  }
+  data.hook = {
+    init(vnode) {
+      //稍后创造真实节点的时候如果是组件则调用init方法
+      let instance = vnode.componentInstance = new vnode.componentOptions.Ctor;
+      instance.$mount(); //instance.$el
+    },
+  };
+  return vnode(vm, tag, key, data, children, null, { Ctor });
+}
+```
+
+所以在上面的`createComponent`函数中，如果`vnode.componentInstance`有值，直接返回`true`了。
+
+需要注意一点，调用`$mount`时我们并没有指定挂载到哪里，所以当前的`el`肯定为空，因此`patch`的时候`oldVNode`就是空，所以要在`patch`里增加挂载组件的逻辑。返回的是组件的渲染结果，也就是`vm.$el`，这也就是为什么上面`createElm`里，如果创建组件，return的是`vnode.componentInstance.$el`。
+
+```javascript
+export function patch(oldVNode, vnode) {
+  //组件的挂载
+  if (!oldVNode) {
+    return createElm(vnode); 
+  }
+  ...
+}
+```
+
+最后需要改造一下`$mount`，无论有没有指定`el`，都需要对模版进行编译
+
+```javascript
+Vue.prototype.$mount = function (el) {
+    ...
+    if (!ops.render) {
+      ...
+      if (!ops.template && el) {
+        template = el.outerHTML;
+      } else {
+        template = ops.template;
+      }
+      if (template) {
+        //对模版编译
+        const render = compileToFunction(template);
+        ops.render = render;
+      }
+    }
+   ...
+  };
+```
+
+最后，总结一下实现组件的虚拟节点和实现组件的渲染的大概流程；
+
+- 创建子类的构造函数的时候，会将全局的组件和自己本身定义的组件进行合并（组件的合并，会先查找自己，再查找全局）
+- 组件的渲染：开始渲染组件时会编译组件的模版变成`render`函数，然后调用`render`方法
+- `createElm`会根据`tag`类型来区分是否是组件，如果是组件会创建组件的虚拟节点（组件增加初始化的钩子，增加`componentOptions`选项，这个选项上面有`Ctor`构造函数），稍后创建组件的真实节点，只需要`new Ctor`即可
 
